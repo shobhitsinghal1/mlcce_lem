@@ -1,0 +1,10 @@
+matplotlib
+pandas
+scipy
+torch
+torchinfo
+numpy
+scikit_learn
+tqdm
+wandb
+gurobipy
