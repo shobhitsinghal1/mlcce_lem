@@ -11,9 +11,11 @@ import logging
 from mvnns.mvnn_generic import MVNN_GENERIC
 from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX
 
+#TODO: integrate these function into the class
+
 class ValueFunctionEstimateDQ():
-    def __init__():
-        pass
+    def __init__(self, ):
+        self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX()
 
     def set_dataset(self, ):
         pass
@@ -86,6 +88,12 @@ class ValueFunctionEstimateDQ():
 
         return np.mean(loss_dq_list)
 
+    def get_max_util_bundle(self, price: np.ndarray):
+        """
+        Query the utility maximizing bundle using the learned value function
+        """
+        self.max_util_mvnn_model.set_model(self.model)
+        return self.max_util_mvnn_model.get_max_util_bundle(price)
 
     def dq_val_mvnn(self,
                     trained_model,

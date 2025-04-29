@@ -6,15 +6,12 @@ from gurobipy import GRB
 import numpy as np
 
 #%% NEW SUCCINCT MVNN MIP FOR CALCULATING MAX UTILITY BUNDLE FOR SINGLE BIDDER: argmax_x {MVNN_i(x)-p*x}
+#TODO: add a public function to get the optimal schedule and update model
 class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
     def __init__(self,
-                 model,
-                 #SATS_domain,
-                 #bidder_id,
-                 #GSVM_national_bidder_goods_of_interest
-                 ):
+                 model):
         
         # MVNN PARAMETERS
         self.model = model  # MVNN TORCH MODEL
