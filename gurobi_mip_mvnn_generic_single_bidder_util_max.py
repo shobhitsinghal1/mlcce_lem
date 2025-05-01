@@ -6,36 +6,51 @@ from gurobipy import GRB
 import numpy as np
 
 #%% NEW SUCCINCT MVNN MIP FOR CALCULATING MAX UTILITY BUNDLE FOR SINGLE BIDDER: argmax_x {MVNN_i(x)-p*x}
-#TODO: add a public function to get the optimal schedule and update model
 class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
-    def __init__(self,
-                 model):
+    def __init__(self, mip_params, model=None):
         
         # MVNN PARAMETERS
-        self.model = model  # MVNN TORCH MODEL
-        self.ts = [layer.ts.data.cpu().detach().numpy().reshape(-1, 1) for layer in model.layers if layer._get_name() not in ['Linear']]
+        self.trained_model = model  # MVNN TORCH MODEL
+        self.price = None
+        self.optimal_schedule = None
+
         # MIP VARIABLES
+        self.ts = [layer.ts.data.cpu().detach().numpy().reshape(-1, 1) for layer in model.layers if layer._get_name() not in ['Linear']]
         self.y_variables = []  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0
         self.a_variables = []  # BINARY VARS 1
         self.b_variables = []  # BINARY VARS 2
         self.case_counter = {'Case1': 0, 'Case2': 0, 'Case3': 0, 'Case4': 0, 'Case5': 0}
+        self.lower_box_bounds = None
+        self.upper_box_bounds = None
+        self.mip = None
+
+        # verbose params
+        self.verbose = False
+        self.solve_verbose = False
+
+        # MIP PARAMETERS
+        self.solve_time_limit = mip_params['timeLimit']
+        self.FeasibilityTol = mip_params['FeasibilityTol']
+        self.IntFeasTol = mip_params['IntFeasTol']
+        self.MIPGap = mip_params['MIPGap']
+        self.outputFlag = mip_params['outputFlag']
  
 
-    def calc_preactivated_box_bounds(self,
+    def __calc_preactivated_box_bounds(self,
                                      verbose = False):
 
         # BOX-bounds for y variable (preactivated!!!!) as column vectors
 
         # Initialize
-        input_upper_bounds = np.array(self.model.capacity_generic_goods, dtype=np.int64).reshape(-1, 1)
+        input_upper_bounds = np.array(self.trained_model.capacity_generic_goods, dtype=np.int64).reshape(-1, 1)
         self.upper_box_bounds = [input_upper_bounds]
         self.lower_box_bounds = [-input_upper_bounds] #C: lb
 
         
         # Propagate through Network 
-        for i, layer in enumerate(self.model.layers):
+        for i, layer in enumerate(self.trained_model.layers):
 
             # -------------------
             if i == 0:
@@ -48,7 +63,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             elif i == 1:
                 W = layer.weight.data.cpu().detach().numpy()
                 b = layer.bias.data.cpu().detach().numpy().reshape(-1, 1)
-                # Remark: no vector t needed since we calculate pre-activate bounds for second hidden layer (first hidden MVNN layer), thus no self.phi() here
+                # Remark: no vector t needed since we calculate pre-activate bounds for second hidden layer (first hidden MVNN layer), thus no self.__phi() here
                 self.upper_box_bounds.append(W @ self.upper_box_bounds[-1] + b)
                 self.lower_box_bounds.append(W @ self.lower_box_bounds[-1] + b)
 
@@ -56,10 +71,10 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                 W = layer.weight.data.cpu().detach().numpy()
                 b = layer.bias.data.cpu().detach().numpy().reshape(-1, 1)
                 # Remark: now we need for preactivated bounds of the ith hidden layer the ts from the previous layer i.e. i-1
-                # However, since self.ts has one dimension less than self.model.layers we need to access now (i-2)nd position which has the vector of t for the (i-1)st hidden layer
+                # However, since self.ts has one dimension less than self.trained_model.layers we need to access now (i-2)nd position which has the vector of t for the (i-1)st hidden layer
                 t = self.ts[i-2]
-                self.upper_box_bounds.append(W @ self.phi(self.upper_box_bounds[-1], t) + b)
-                self.lower_box_bounds.append(W @ self.phi(self.lower_box_bounds[-1], t) + b)
+                self.upper_box_bounds.append(W @ self.__phi(self.upper_box_bounds[-1], t) + b)
+                self.lower_box_bounds.append(W @ self.__phi(self.lower_box_bounds[-1], t) + b)
             # -------------------
 
         if verbose:
@@ -71,31 +86,28 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         return
 
 
-    def phi(self, x, t):
+    def __phi(self, x, t):
         # Bounded ReLU (bReLU) activation function for MVNNS with cutoff t
         return np.minimum(t, np.maximum(0, x)).reshape(-1, 1)
 
 
-    def generate_mip(self,
-                     prices = None,
-                     MIPGap = None,
-                     verbose = False,
-                     ):
+    def __generate_mip(self, ):
 
         self.mip = gp.Model("MVNN GENERIC MIP")
 
         # Add IntFeasTol, primal feasibility
-        if MIPGap:
-            self.mip.Params.MIPGap = MIPGap
+        if self.MIPGap:
+            self.mip.Params.MIPGap = self.MIPGap
 
-        self.calc_preactivated_box_bounds(verbose=verbose)
+        self.__calc_preactivated_box_bounds(verbose=self.verbose)
 
         # --- Variable declaration -----
-        input_ubs = {i: self.upper_box_bounds[0][i, 0] for i in range(len(prices))}
-        input_lbs = {i: self.lower_box_bounds[0][i, 0] for i in range(len(prices))}
-        self.y_variables.append(self.mip.addVars([i for i in range(len(prices))], name="x_", vtype = GRB.CONTINUOUS, lb=input_lbs, ub=input_ubs))  # the "input variables, i.e. the first y level", C: continuous
+        n_prod = len(self.trained_model.layers[0].weight.data[0])
+        input_ubs = {i: self.upper_box_bounds[0][i, 0] for i in range(n_prod)}
+        input_lbs = {i: self.lower_box_bounds[0][i, 0] for i in range(n_prod)}
+        self.y_variables.append(self.mip.addVars([i for i in range(n_prod)], name="x_", vtype = GRB.CONTINUOUS, lb=input_lbs, ub=input_ubs))  # the "input variables, i.e. the first y level", C: continuous
 
-        for (i, layer) in enumerate(self.model.layers):
+        for (i, layer) in enumerate(self.trained_model.layers):
             tmp_y_variables = []
             tmp_a_variables = []
             tmp_b_variables = []
@@ -118,12 +130,12 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             if len(tmp_b_variables) > 0:
                 self.b_variables.append(tmp_b_variables)
 
-        layer = self.model.output_layer
+        layer = self.trained_model.output_layer
         self.y_variables.append([self.mip.addVar(name='y_output_0', vtype = GRB.CONTINUOUS)])   #C: lb
 
         # ---  MVNN Constraints ---
         # Remark: now we need to access for self.y_variables[i+1] the self.ts[i-1], self.a_variables[i-1] and self.b_variables[i-1] !!!
-        for (i, layer) in enumerate(self.model.layers):
+        for (i, layer) in enumerate(self.trained_model.layers):
             if i == 0:
                 # NEW: first hidden layer after generic transformation
                 for (j, weight) in enumerate(layer.weight.data):
@@ -175,9 +187,9 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                         # TYPE 4 Constraints for the whole network (except the output layer)
                         self.mip.addConstr(self.y_variables[i+1][j] >= gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) + layer.bias.data[j] + (self.ts[i-1][j, 0] - self.upper_box_bounds[i+1][j, 0]) * self.b_variables[i-1][j], name=f'HLayer_{i+1}_{j}_Default_CT4')
 
-        output_weight = self.model.output_layer.weight.data[0]
-        # if (self.model.output_layer.bias is not None):
-        output_bias = self.model.output_layer.bias.data
+        output_weight = self.trained_model.output_layer.weight.data[0]
+        # if (self.trained_model.output_layer.bias is not None):
+        output_bias = self.trained_model.output_layer.bias.data
         # else:
         #     output_bias = 0
 
@@ -187,74 +199,29 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
         # Final output layer of MVNN
         # Linear Constraints for the output layer WITH lin_skip_layer: W*y
-        if hasattr(self.model, 'lin_skip_layer'):
-            lin_skip_W = self.model.lin_skip_layer.weight.detach().cpu().numpy() 
+        if hasattr(self.trained_model, 'lin_skip_layer'):
+            lin_skip_W = self.trained_model.lin_skip_layer.weight.detach().cpu().numpy() 
             self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias + gp.quicksum(lin_skip_W[0, i]*self.y_variables[0][i] for i in range(lin_skip_W.shape[1])) == self.y_variables[-1][0], name='output_layer')
         # Linear Constraints for the output layer WIHTOUT lin_skip_layer: W*y + W_0*x
         else:
             self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias == self.y_variables[-1][0], name='output_layer')
 
-        # --- Objective Declaration ---
-        self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * prices[i] for i in range(len(prices))), GRB.MAXIMIZE)
+        # # --- Objective Declaration ---
+        # self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * price[i] for i in range(len(price))), GRB.MAXIMIZE)
 
         self.mip.update()
-        if (verbose):
+        if (self.verbose):
             self.mip.write('MVNN_generic_mip_'+'_'.join(time.ctime().replace(':', '-').split(' '))+'.lp') # remark: if not updated mip.write() also calls mip.update()
 
         return
 
 
-    def update_prices_in_objective(self, prices):
-        self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * prices[i] for i in range(len(prices))), GRB.MAXIMIZE)
-        return
-
-
-    def solve_mip(self,
-                  outputFlag = False,
-                  verbose = True,
-                  timeLimit = np.inf,
-                  MIPGap = 1e-04,
-                  IntFeasTol = 1e-5,
-                  FeasibilityTol = 1e-6
-                  ):
-        
-        if not verbose:
-            self.mip.Params.LogToConsole = 0
-            self.mip.Params.OutputFlag = 0
-
-        # set solve parameter (if not sepcified, default values are used)
-        self.mip.Params.timeLimit = timeLimit # Default +inf
-        self.mip.Params.MIPGap = MIPGap # Default 1e-04
-        self.mip.Params.IntFeasTol = IntFeasTol # Default 1e-5
-        self.mip.Params.FeasibilityTol = FeasibilityTol # Default 1e-6
-        #
-
-        self.start = timer()
-        self.mip.Params.OutputFlag = outputFlag
-        self.mip.optimize() # remark: if not updated mip.optimize() also calls mip.update()
-        self.end = timer()
-
-        self.optimal_schedule = []
-        # test try-catch for non-feasible solution
-        try:
-            for i in range(len(self.y_variables[0])):
-                self.optimal_schedule.append(self.y_variables[0][i].x) # TODO: check if this is correct
-        except:
-            self._print_info()
-            raise ValueError('MIP did not solve succesfully!')
-
-        if verbose:
-            self._print_info()
-
-        return self.optimal_schedule
-
-
-    def _print_info(self):
+    def __print_info(self):
         print(*['*']*30)
         print('MIP INFO:')
         print(*['-']*30)
         print(f'Name: {self.mip.ModelName}')
-        print(f'Goal: {self._model_sense_converter(self.mip.ModelSense)}')
+        print(f'Goal: {self.__model_sense_converter(self.mip.ModelSense)}')
         print(f'Objective: {self.mip.getObjective()}')
         print(f'Number of variables: {self.mip.NumVars}')
         print(f' - Binary {self.mip.NumBinVars}')
@@ -266,7 +233,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         print('')
         print('MIP SOLUTION:')
         print(*['-']*30)
-        print(f'Status: {self._status_converter(self.mip.status)}')
+        print(f'Status: {self.__status_converter(self.mip.status)}')
         print(f'Elapsed in sec: {self.end - self.start}')
         print(f'Reached Relative optimality gap: {self.mip.MIPGap}')   
         print(f'Optimal Allocation: {self.optimal_schedule}')
@@ -278,15 +245,59 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         print(*['*']*30)
 
 
-    def _status_converter(self, int_status):
+    def __status_converter(self, int_status):
         status_table = ['woopsies!', 'LOADED', 'OPTIMAL', 'INFEASIBLE', 'INF_OR_UNBD', 'UNBOUNDED', 'CUTOFF', 'ITERATION_LIMIT', 'NODE_LIMIT', 'TIME_LIMIT', 'SOLUTION_LIMIT', 'INTERRUPTED', 'NUMERIC', 'SUBOPTIMAL', 'INPROGRESS', 'USER_OBJ_LIMIT']
         return status_table[int_status]
 
 
-    def _model_sense_converter(self, int_sense):
+    def __model_sense_converter(self, int_sense):
         if int_sense == 1:
             return 'Minimize'
         elif int_sense == -1:
             return 'Maximize'
         else:
             raise ValueError('int_sense needs to be -1:maximize or 1: minimize')
+
+
+    def update_prices_in_objective(self, price: np.ndarray):
+        self.price = price
+        self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * price[i] for i in range(len(price))), GRB.MAXIMIZE)
+        return
+
+
+    def update_model(self, model):
+        self.trained_model = model
+        self.__generate_mip()
+        return
+
+
+    def get_max_util_bundle(self, ) -> np.ndarray:
+        
+        if not self.solve_verbose:
+            self.mip.Params.LogToConsole = 0
+            self.mip.Params.OutputFlag = 0
+
+        # set solve parameter (if not sepcified, default values are used)
+        self.mip.Params.timeLimit = self.timeLimit # Default +inf
+        self.mip.Params.MIPGap = self.MIPGap # Default 1e-04
+        self.mip.Params.IntFeasTol = self.IntFeasTol # Default 1e-5
+        self.mip.Params.FeasibilityTol = self.FeasibilityTol # Default 1e-6
+
+        self.start = timer()
+        self.mip.Params.OutputFlag = self.outputFlag
+        self.mip.optimize() # remark: if not updated mip.optimize() also calls mip.update()
+        self.end = timer()
+
+        self.optimal_schedule = []
+        # test try-catch for non-feasible solution
+        try:
+            for i in range(len(self.y_variables[0])):
+                self.optimal_schedule.append(self.y_variables[0][i].x) # TODO: check if this is correct
+        except:
+            self.__print_info()
+            raise ValueError('MIP did not solve succesfully!')
+
+        if self.solve_verbose:
+            self.__print_info()
+
+        return np.array(self.optimal_schedule)

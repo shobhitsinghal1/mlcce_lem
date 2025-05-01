@@ -380,7 +380,7 @@ class ValueFunctionEstimateDQ():
                             init_b = self.mvnn_params['init_b'],
                             init_bias = self.mvnn_params['init_bias'],
                             init_little_const = self.mvnn_params['init_little_const'],
-                            capacity_generic_goods=self.mvnn_params['capacity_generic_goods']
+                            capacity_generic_goods=self.capacity_generic_goods
                             )
 
 
@@ -447,7 +447,14 @@ class ValueFunctionEstimateDQ():
         return model, metrics
 
 
-    def get_max_util_bundle(self, price: np.ndarray):
+    def get_bundle_value(self, bundle: np.ndarray) -> float:
+        """
+        Get the value of a bundle using the learned value function.
+        """
+        self.trained_model.eval()
+        return self.trained_model(bundle)
+    
+    def get_max_util_bundle(self, price: np.ndarray) -> np.ndarray:
         """
         Query the utility maximizing bundle using the learned value function and for given price.
         """

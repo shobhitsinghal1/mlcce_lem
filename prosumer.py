@@ -37,7 +37,7 @@ class Prosumer:
         
     def __construct_demand_query_model(self, ) -> pyo.AbstractModel:
         """
-        Construct the demand query optimization parametric model for the prosumer.
+        Constructs the demand query optimization model parameterized in price.
         :return: demand query model.
         """
         model = pyo.AbstractModel()
@@ -152,7 +152,7 @@ class Prosumer:
 
         return model
         
-    def bundle_query(self, price: np.ndarray) -> np.ndarray:
+    def bundle_query(self, price: np.ndarray) -> tuple:
         """
         Query the utility maximizing demand of the prosumer for given prices.
         :param prices: price vector.
@@ -168,8 +168,7 @@ class Prosumer:
         if solution.Solver.termination_condition == pyo.TerminationCondition.infeasibleOrUnbounded:
             raise ValueError("The prosumer greedy bundle model is infeasible or unbounded.")
 
-        return np.array(instance.p[h] for h in instance.H)
-    
-    def calculate_value(self, bundle) -> float:
-        # TODO: implement this function
+        return np.array(instance.p[h] for h in instance.H), pyo.value(instance.obj)
+
+    def get_capacity_generic_goods(self, ) -> list:
         pass
