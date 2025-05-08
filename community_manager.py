@@ -7,17 +7,13 @@ class CommunityManager:
     def __init__(self, community: str):
         self.community = community
         self.community_config = community_configs[community]
-        self.prosumers = self.__make_prosumers()
+        self.prosumers = [Prosumer(prosumer) for prosumer in self.community_config["prosumers"]]
         self.mlcce = MLCCE(np.array(self.community_config["price_init"]), self.query_bundle, len(self.prosumers))
-        
-    def __make_prosumers(self, ) -> list:
-        return [Prosumer(prosumer) for prosumer in self.community_config["prosumers"]]
-    
+
     def query_bundle(self, price: np.ndarray) -> tuple:
         """
         Query the utility maximizing bundle from prosumers at the given price
         """
-        
         bundles = []
         values = []
         for prosumer in self.prosumers:

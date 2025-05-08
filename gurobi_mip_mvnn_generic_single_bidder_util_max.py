@@ -4,24 +4,25 @@ from timeit import default_timer as timer
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
+import io
+import contextlib
 
 #%% NEW SUCCINCT MVNN MIP FOR CALCULATING MAX UTILITY BUNDLE FOR SINGLE BIDDER: argmax_x {MVNN_i(x)-p*x}
 class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
-    def __init__(self, mip_params, model=None):
+    def __init__(self, mip_params, capacity_generic_goods):
         
         # MVNN PARAMETERS
-        self.trained_model = model  # MVNN TORCH MODEL
-        self.price = None
+        self.trained_model = None  # MVNN TORCH MODEL
+        self.price = None # scaled price vector
         self.optimal_schedule = None
 
         # MIP VARIABLES
-        self.ts = [layer.ts.data.cpu().detach().numpy().reshape(-1, 1) for layer in model.layers if layer._get_name() not in ['Linear']]
-        self.y_variables = []  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0
-        self.a_variables = []  # BINARY VARS 1
-        self.b_variables = []  # BINARY VARS 2
-        self.case_counter = {'Case1': 0, 'Case2': 0, 'Case3': 0, 'Case4': 0, 'Case5': 0}
+        self.y_variables = None  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0
+        self.a_variables = None  # BINARY VARS 1
+        self.b_variables = None  # BINARY VARS 2
+        self.case_counter = None
         self.lower_box_bounds = None
         self.upper_box_bounds = None
         self.mip = None
@@ -35,8 +36,14 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         self.FeasibilityTol = mip_params['FeasibilityTol']
         self.IntFeasTol = mip_params['IntFeasTol']
         self.MIPGap = mip_params['MIPGap']
+        self.DualReductions = mip_params['DualReductions']
         self.outputFlag = mip_params['outputFlag']
- 
+
+        self.gpenv = gp.Env(params={'LogToConsole': 0 if not self.solve_verbose else 1,
+                                    'OutputFlag': 0 if not self.solve_verbose else 1})
+        
+        self.capacity_generic_goods = capacity_generic_goods
+
 
     def __calc_preactivated_box_bounds(self,
                                      verbose = False):
@@ -93,11 +100,16 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
     def __generate_mip(self, ):
 
-        self.mip = gp.Model("MVNN GENERIC MIP")
+        self.y_variables = []  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0
+        self.a_variables = []  # BINARY VARS 1
+        self.b_variables = []  # BINARY VARS 2
+        self.case_counter = {'Case1': 0, 'Case2': 0, 'Case3': 0, 'Case4': 0, 'Case5': 0}
+
+        self.mip = gp.Model("MVNN GENERIC MIP", env=self.gpenv)
 
         # Add IntFeasTol, primal feasibility
-        if self.MIPGap:
-            self.mip.Params.MIPGap = self.MIPGap
+        # if self.MIPGap:
+        #     self.mip.Params.MIPGap = self.MIPGap
 
         self.__calc_preactivated_box_bounds(verbose=self.verbose)
 
@@ -131,7 +143,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                 self.b_variables.append(tmp_b_variables)
 
         layer = self.trained_model.output_layer
-        self.y_variables.append([self.mip.addVar(name='y_output_0', vtype = GRB.CONTINUOUS)])   #C: lb
+        self.y_variables.append([self.mip.addVar(name='y_output_0', vtype = GRB.CONTINUOUS, lb = float('-inf'))])   #C: lb
 
         # ---  MVNN Constraints ---
         # Remark: now we need to access for self.y_variables[i+1] the self.ts[i-1], self.a_variables[i-1] and self.b_variables[i-1] !!!
@@ -144,15 +156,15 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                 for (j, weight) in enumerate(layer.weight.data):
                     # CASE 1 -> REMOVAL:
                     if self.lower_box_bounds[i+1][j, 0] >= self.ts[i-1][j, 0]:
-                        self.y_variables[i+1][j] = self.ts[i-1][j, 0]
+                        self.mip.addConstr(self.y_variables[i+1][j] == self.ts[i-1][j, 0], name=f'HLayer_{i+1}_{j}_Case1_CT1')
                         self.case_counter['Case1'] += 1
                     # CASE 2 -> REMOVAL:
                     elif self.upper_box_bounds[i+1][j, 0] <= 0:
-                        self.y_variables[i+1][j] = 0
+                        self.mip.addConstr(self.y_variables[i+1][j] == 0, name=f'HLayer_{i+1}_{j}_Case2_CT1')
                         self.case_counter['Case2'] += 1
                     # CASE 3 -> REMOVAL:
                     elif (self.lower_box_bounds[i+1][j, 0] >= 0 and self.lower_box_bounds[i+1][j, 0] <= self.ts[i-1][j, 0]) and (self.upper_box_bounds[i+1][j, 0] >= 0 and self.upper_box_bounds[i+1][j, 0] <= self.ts[i-1][j, 0]):
-                        self.y_variables[i+1][j] = gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) + layer.bias.data[j]
+                        self.mip.addConstr(self.y_variables[i+1][j] == gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) + layer.bias.data[j], name=f'HLayer_{i+1}_{j}_Case3_CT1')
                         self.case_counter['Case3'] += 1
                     # CASE 4 -> REMOVAL:
                     elif self.lower_box_bounds[i+1][j, 0] >= 0:
@@ -205,9 +217,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # Linear Constraints for the output layer WIHTOUT lin_skip_layer: W*y + W_0*x
         else:
             self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias == self.y_variables[-1][0], name='output_layer')
-
-        # # --- Objective Declaration ---
-        # self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * price[i] for i in range(len(price))), GRB.MAXIMIZE)
 
         self.mip.update()
         if (self.verbose):
@@ -267,21 +276,24 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
     def update_model(self, model):
         self.trained_model = model
+        self.ts = [layer.ts.data.cpu().detach().numpy().reshape(-1, 1) for layer in model.layers if layer._get_name() not in ['Linear']]
         self.__generate_mip()
         return
 
 
     def get_max_util_bundle(self, ) -> np.ndarray:
         
-        if not self.solve_verbose:
-            self.mip.Params.LogToConsole = 0
-            self.mip.Params.OutputFlag = 0
+        # if not self.solve_verbose:
+        #     with contextlib.redirect_stdout(io.StringIO()) as f:
+        #         self.mip.Params.LogToConsole = 0
+        #         self.mip.Params.OutputFlag = 0
 
         # set solve parameter (if not sepcified, default values are used)
-        self.mip.Params.timeLimit = self.timeLimit # Default +inf
+        self.mip.Params.TimeLimit = self.solve_time_limit # Default +inf
         self.mip.Params.MIPGap = self.MIPGap # Default 1e-04
         self.mip.Params.IntFeasTol = self.IntFeasTol # Default 1e-5
         self.mip.Params.FeasibilityTol = self.FeasibilityTol # Default 1e-6
+        self.mip.Params.DualReductions = self.DualReductions
 
         self.start = timer()
         self.mip.Params.OutputFlag = self.outputFlag
@@ -294,6 +306,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             for i in range(len(self.y_variables[0])):
                 self.optimal_schedule.append(self.y_variables[0][i].x) # TODO: check if this is correct
         except:
+            self.mip.write('mip_mvnn_generic_single_bidder_ilp.ilp')
             self.__print_info()
             raise ValueError('MIP did not solve succesfully!')
 

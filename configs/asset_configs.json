@@ -18,8 +18,8 @@
     "load2": {
         "type": "fixedload",
         "lamb": [30, 30],
-        "gu": [0, -2],
-        "gl": [0, -2]
+        "gu": [0, 1],
+        "gl": [0, 1]
     },
     "solar1": {
         "type": "fixedload",
@@ -42,7 +42,9 @@
         "sl": [0.5, 0.5],
         "eta": 0.95,
         "gamma": [0.01, 0.01],
-        "beta": [1, 1]
+        "beta": [1, 1],
+        "capacity": 5,
+        "ramp_limit": 2
     },
     "storage2": {
         "type": "storage",
@@ -53,7 +55,9 @@
         "sl": [0.5, 0.5],
         "eta": 0.95,
         "gamma": [0.01, 0.01],
-        "beta": [1, 1]
+        "beta": [1, 1],
+        "capacity": 5,
+        "ramp_limit": 2
     },
     "storage3": {
         "type": "storage",
@@ -64,6 +68,8 @@
         "sl": [0.5, 0.5],
         "eta": 0.95,
         "gamma": [0.01, 0.01],
-        "beta": [1, 1]
+        "beta": [1, 1],
+        "capacity": 5,
+        "ramp_limit": 2
     }
 }

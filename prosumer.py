@@ -1,11 +1,14 @@
 from utils import prosumer_configs, asset_configs
 import numpy as np
 import pyomo.environ as pyo
+from pyomo.opt import SolverStatus, TerminationCondition
+from pyomo.repn.plugins.lp_writer import LPWriter
+import logging
+logging.getLogger('pyomo.core').setLevel(logging.ERROR)
 
 class Prosumer:
     def __init__(self, prosumer: str):
         self.prosumer_config = prosumer_configs[prosumer]
-        self.prosumer_demand_query_model = self.__construct_demand_query_model()
         self.asset_configs = asset_configs
         self.asset_configs_by_type = self.__group_configs_by_type()
         self.dq_model = self.__construct_demand_query_model()
@@ -35,68 +38,7 @@ class Prosumer:
                     param_values[i] = asset_configs[i][param_name]
         return param_values
         
-    def __construct_demand_query_model(self, ) -> pyo.AbstractModel:
-        """
-        Constructs the demand query optimization model parameterized in price.
-        :return: demand query model.
-        """
-        model = pyo.AbstractModel()
-
-        nIf = len(self.asset_configs_by_type['fixedload'])
-        nIs = len(self.asset_configs_by_type['storage'])
-        nH = len(self.asset_configs_by_type['fixedload'][0]['lamb']) if nIf > 0 else len(self.asset_configs_by_type['storage'][0]['lambl'])
-
-        #sets
-        model.H = pyo.RangeSet(0, nH-1)
-        model.Hs = pyo.RangeSet(-1, nH-1)
-        model.If = pyo.RangeSet(0, nIf-1)
-        model.Is = pyo.RangeSet(0, nIs-1)
-
-        model.M = pyo.Param(default=1000) # Is there a better way to do this - like the one in mvnn mip?
-
-        #price as parameter
-        model.price = pyo.Param(model.H) # price vector
-
-        #preference parameters
-        #   fixed load
-        model.lamb = pyo.Param(model.If, model.H, default=self.__get_param_values('lamb', 'fixedload')) # linear hourly coefficients
-        model.gu = pyo.Param(model.If, model.H, default=self.__get_param_values('gu', 'fixedload')) # upper limit on production
-        model.gl = pyo.Param(model.If, model.H, default=self.__get_param_values('gl', 'fixedload')) # lower limit on production
-        #   storage
-        model.lambl = pyo.Param(model.Is, model.H, default=self.__get_param_values('lambl', 'storage')) # lower limit violation penalty coeff
-        model.lambu = pyo.Param(model.Is, model.H, default=self.__get_param_values('lambu', 'storage')) # upper limit violation penalty coeff
-        model.su = pyo.Param(model.Is, model.H, default=self.__get_param_values('su', 'storage')) # SoC upper limit
-        model.sl = pyo.Param(model.Is, model.H, default=self.__get_param_values('sl', 'storage')) # SoC lower limit
-        model.s0 = pyo.Param(model.Is, default=self.__get_param_values('s0', 'storage')) # initial SoC
-        model.eta = pyo.Param(model.Is, default=self.__get_param_values('eta', 'storage')) # charging efficiency
-        model.gamma = pyo.Param(model.Is, model.H, default=self.__get_param_values('gamma', 'storage')) # dissipation rate
-        model.beta = pyo.Param(model.Is, model.H, default=self.__get_param_values('beta', 'storage')) # storage degradation coeff
-
-        #variables
-        model.p = pyo.Var(model.H) # net power
-        model.pf = pyo.Var(model.If, model.H) # power for fixed load
-        model.ps = pyo.Var(model.Is, model.H) # power for storage
-        #   auxiliary: storage
-        model.deltap = pyo.Var(model.Is, model.H, domain=pyo.Binary)
-        model.s = pyo.Var(model.Is, model.Hs, domain=pyo.NonNegativeReals)
-        model.tu = pyo.Var(model.Is, model.H, domain=pyo.NonNegativeReals)
-        model.tl = pyo.Var(model.Is, model.H, domain=pyo.NonNegativeReals)
-        model.P = pyo.Var(model.Is, model.H)
-
-        #objective
-
-        def objf(m, i):
-            return sum(m.pf[i, h] * m.lamb[i, h] for h in m.H)
-
-        def objs(m, i):
-            return sum(-m.tu[i,h]*m.lambu[i,h] - m.tl[i,h]*m.lambl[i,h] - m.P[i,h]*m.beta[i,h] for h in m.H)
-
-        def obj_expression(m):
-            return sum(objf(m, i) for i in m.If) + sum(objs(m, i) for i in m.Is) - sum(m.p[h]*m.price[h] for h in m.H)
-
-        model.obj = pyo.Objective(rule=obj_expression, sense=pyo.maximize)
-        # model.dual = pyo.Suffix(direction=pyo.Suffix.IMPORT)
-
+    def __add_asset_constraints(self, model: pyo.AbstractModel):
         def conp(m, h):
             return m.p[h] == sum(m.pf[i, h] for i in m.If) + sum(m.ps[i, h] for i in m.Is)
         
@@ -127,6 +69,12 @@ class Prosumer:
         def cons6(m, i, h):
             return m.s[i,h] >= m.sl[i,h] - m.tl[i,h]
 
+        def cons7(m, i, h): #ramp limit
+            return m.P[i,h] <= m.ramp_limit[i]
+        
+        def cons8(m, i, h): #capacity limit
+            return (0, m.s[i,h], m.capacity[i])
+
         def cons9(m, i, h):
             return m.P[i,h] >= m.ps[i,h]
 
@@ -136,27 +84,98 @@ class Prosumer:
         def cons11(m, i):
             return m.s[i,-1] == m.s0[i]
 
-        model.conp = pyo.Constraint(model.H, rule=conp)
-        model.conf1 = pyo.Constraint(model.If, model.H, rule=conf1)
-        model.cons1 = pyo.Constraint(model.Is, model.H, rule=cons1)
-        model.cons2 = pyo.Constraint(model.Is, model.H, rule=cons2)
-        model.cons3u = pyo.Constraint(model.Is, model.H, rule=cons3u)
-        model.cons3l = pyo.Constraint(model.Is, model.H, rule=cons3l)
-        model.cons4u = pyo.Constraint(model.Is, model.H, rule=cons4u)
-        model.cons4l = pyo.Constraint(model.Is, model.H, rule=cons4l)
-        model.cons5 = pyo.Constraint(model.Is, model.H, rule=cons5)
-        model.cons6 = pyo.Constraint(model.Is, model.H, rule=cons6)
-        model.cons9 = pyo.Constraint(model.Is, model.H, rule=cons9)
-        model.cons10 = pyo.Constraint(model.Is, model.H, rule=cons10)
-        model.cons11 = pyo.Constraint(model.Is, rule=cons11)
+        model.conp = pyo.Constraint(model.H, rule=conp, name='conp')
+        model.conf1 = pyo.Constraint(model.If, model.H, rule=conf1, name='conf1')
+        model.cons1 = pyo.Constraint(model.Is, model.H, rule=cons1, name='cons1')
+        model.cons2 = pyo.Constraint(model.Is, model.H, rule=cons2, name='cons2')
+        model.cons3u = pyo.Constraint(model.Is, model.H, rule=cons3u, name='cons3u')
+        model.cons3l = pyo.Constraint(model.Is, model.H, rule=cons3l, name='cons3l')
+        model.cons4u = pyo.Constraint(model.Is, model.H, rule=cons4u, name='cons4u')
+        model.cons4l = pyo.Constraint(model.Is, model.H, rule=cons4l, name='cons4l')
+        model.cons5 = pyo.Constraint(model.Is, model.H, rule=cons5, name='cons5')
+        model.cons6 = pyo.Constraint(model.Is, model.H, rule=cons6, name='cons6')
+        model.cons7 = pyo.Constraint(model.Is, model.H, rule=cons7, name='cons7')
+        model.cons8 = pyo.Constraint(model.Is, model.H, rule=cons8, name='cons8')
+        model.cons9 = pyo.Constraint(model.Is, model.H, rule=cons9, name='cons9')
+        model.cons10 = pyo.Constraint(model.Is, model.H, rule=cons10, name='cons10')
+        model.cons11 = pyo.Constraint(model.Is, rule=cons11, name='cons11')
+
+        return
+    
+    def __add_dq_objective(self, model: pyo.AbstractModel):
+        #objective
+
+        def objf(m, i):
+            return sum(m.pf[i, h] * m.lamb[i, h] for h in m.H)
+
+        def objs(m, i):
+            return sum(-m.tu[i,h]*m.lambu[i,h] - m.tl[i,h]*m.lambl[i,h] - m.P[i,h]*m.beta[i,h] for h in m.H)
+
+        def obj_expression(m):
+            return sum(objf(m, i) for i in m.If) + sum(objs(m, i) for i in m.Is) - sum(m.p[h]*m.price[h] for h in m.H)
+
+        model.obj = pyo.Objective(rule=obj_expression, sense=pyo.maximize)
+    
+    def __construct_demand_query_model(self, ) -> pyo.AbstractModel:
+        """
+        Constructs the demand query optimization model parameterized in price.
+        :return: demand query model.
+        """
+        model = pyo.AbstractModel()
+
+        nIf = len(self.asset_configs_by_type['fixedload'] if 'fixedload' in self.asset_configs_by_type.keys() else [])
+        nIs = len(self.asset_configs_by_type['storage'] if 'storage' in self.asset_configs_by_type.keys() else [])
+        nH = len(self.asset_configs_by_type['fixedload'][0]['lamb']) if nIf > 0 else len(self.asset_configs_by_type['storage'][0]['lambl'])
+
+        #sets
+        model.H = pyo.RangeSet(0, nH-1)
+        model.Hs = pyo.RangeSet(-1, nH-1)
+        model.If = pyo.RangeSet(0, nIf-1)
+        model.Is = pyo.RangeSet(0, nIs-1)
+
+        model.M = pyo.Param(default=1000) # Is there a better way to do this - like the one in mvnn mip?
+
+        #price as parameter
+        model.price = pyo.Param(model.H, name='price') # price vector
+
+        #preference parameters
+        #   fixed load
+        model.lamb = pyo.Param(model.If, model.H, default=self.__get_param_values('lamb', 'fixedload'), name='lamb') # linear hourly coefficients
+        model.gu = pyo.Param(model.If, model.H, default=self.__get_param_values('gu', 'fixedload'), name='gu') # upper limit on production
+        model.gl = pyo.Param(model.If, model.H, default=self.__get_param_values('gl', 'fixedload'), name='gl') # lower limit on production
+        #   storage
+        model.lambl = pyo.Param(model.Is, model.H, default=self.__get_param_values('lambl', 'storage')) # lower limit violation penalty coeff
+        model.lambu = pyo.Param(model.Is, model.H, default=self.__get_param_values('lambu', 'storage')) # upper limit violation penalty coeff
+        model.su = pyo.Param(model.Is, model.H, default=self.__get_param_values('su', 'storage')) # SoC upper limit
+        model.sl = pyo.Param(model.Is, model.H, default=self.__get_param_values('sl', 'storage')) # SoC lower limit
+        model.s0 = pyo.Param(model.Is, default=self.__get_param_values('s0', 'storage')) # initial SoC
+        model.eta = pyo.Param(model.Is, default=self.__get_param_values('eta', 'storage')) # charging efficiency
+        model.gamma = pyo.Param(model.Is, model.H, default=self.__get_param_values('gamma', 'storage')) # dissipation rate
+        model.beta = pyo.Param(model.Is, model.H, default=self.__get_param_values('beta', 'storage')) # storage degradation coeff
+        model.capacity = pyo.Param(model.Is, default=self.__get_param_values('capacity', 'storage')) # storage capacity
+        model.ramp_limit = pyo.Param(model.Is, default=self.__get_param_values('ramp_limit', 'storage')) # ramp limit
+
+        #variables
+        model.p = pyo.Var(model.H, name='p') # net power
+        model.pf = pyo.Var(model.If, model.H, name='pf') # power for fixed load
+        model.ps = pyo.Var(model.Is, model.H, name='ps') # power for storage
+        #   auxiliary: storage
+        model.deltap = pyo.Var(model.Is, model.H, domain=pyo.Binary, name='deltap')
+        model.s = pyo.Var(model.Is, model.Hs, domain=pyo.NonNegativeReals, name='s')
+        model.tu = pyo.Var(model.Is, model.H, domain=pyo.NonNegativeReals, name='tu')
+        model.tl = pyo.Var(model.Is, model.H, domain=pyo.NonNegativeReals, name='tl')
+        model.P = pyo.Var(model.Is, model.H, name='P')
+
+        self.__add_dq_objective(model)
+        self.__add_asset_constraints(model)
 
         return model
-        
+    
     def bundle_query(self, price: np.ndarray) -> tuple:
         """
         Query the utility maximizing demand of the prosumer for given prices.
         :param prices: price vector.
-        :return: demand vector.
+        :return: bundle, utility.
         """
         instance = self.dq_model.create_instance({None: {
                                                          'price': {h: price[h] for h in range(len(price))}
@@ -167,8 +186,39 @@ class Prosumer:
 
         if solution.Solver.termination_condition == pyo.TerminationCondition.infeasibleOrUnbounded:
             raise ValueError("The prosumer greedy bundle model is infeasible or unbounded.")
+        
+        bundle = np.array([instance.p[h].value for h in instance.H])
+        return bundle, pyo.value(instance.obj)+np.dot(price, bundle)
 
-        return np.array(instance.p[h] for h in instance.H), pyo.value(instance.obj)
+    def get_value(self, bundle: np.ndarray) -> float:
+        model = self.dq_model.clone()
+        solver = pyo.SolverFactory('gurobi_direct')
+        def con_bundle(m, h):
+            return m.p[h] == bundle[h]
+        model.cons_bundle = pyo.Constraint(model.H, rule=con_bundle, name='cons_bundle')
+        instance = model.create_instance({None: {
+                                                    'price': {h: 0 for h in model.H}
+                                                }})
 
-    def get_capacity_generic_goods(self, ) -> list:
-        pass
+        solution = solver.solve(instance, tee=False)
+        if solution.solver.status != SolverStatus.ok:
+            # print(f"Termination condition for bundle {bundle}: {solution.solver.termination_condition}")
+            return np.nan
+
+        return pyo.value(instance.obj)
+
+    def get_capacity_generic_goods(self, ) -> np.ndarray:
+        #debugging
+        # writer = LPWriter()
+        model = self.dq_model.clone()
+        solver = pyo.SolverFactory('gurobi_direct')
+        bounds = []
+        for i in range(len(model.H)):
+            bounds.append([])
+            for sense in [-1, 1]:
+                model.obj = pyo.Objective(rule=lambda m: m.p[i]*sense, sense=pyo.maximize)
+                instance = model.create_instance()
+                solver.solve(instance, tee=False)
+                bounds[i].append(np.abs(instance.p[i].value))
+                # writer.write(instance, open('model1.lp', 'w'), symbolic_solver_labels=True)
+        return np.max(bounds, axis=1)

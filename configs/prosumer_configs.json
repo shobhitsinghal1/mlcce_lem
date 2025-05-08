@@ -3,7 +3,7 @@
         "assets": ["load0", "grid"]
     },
     "a": {
-        "assets": ["load1", "solar1", "storage1"]
+        "assets": [ "storage1"]
     },
     "b": {
         "assets": ["load2", "wind2"]
