@@ -1,12 +1,32 @@
-from utils import prosumer_configs, asset_configs
+from utils import *
 import numpy as np
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 from pyomo.repn.plugins.lp_writer import LPWriter
 import logging
+from abc import ABC, abstractmethod
+from scipy import optimize as opt
+import gurobipy as gp
+from gurobipy import GRB
+
 logging.getLogger('pyomo.core').setLevel(logging.ERROR)
 
-class Prosumer:
+class Bidder(ABC):
+    @abstractmethod
+    def bundle_query(self, price: np.ndarray) -> tuple:
+        pass
+
+    @abstractmethod
+    def get_value(self, bundle: np.ndarray) -> float:
+        pass
+
+    @abstractmethod
+    def get_capacity_generic_goods(self, ) -> np.ndarray:
+        pass
+
+
+
+class Prosumer(Bidder):
     def __init__(self, prosumer: str):
         self.prosumer_config = prosumer_configs[prosumer]
         self.asset_configs = asset_configs
@@ -222,3 +242,66 @@ class Prosumer:
                 bounds[i].append(np.abs(instance.p[i].value))
                 # writer.write(instance, open('model1.lp', 'w'), symbolic_solver_labels=True)
         return np.max(bounds, axis=1)
+
+
+class LogarithmicBidder(Bidder):
+    def __init__(self, name: str):
+        self.name = name
+        self.intervals = bidder_configs[name]['intervals']
+        self.flowlimit = bidder_configs[name]['flowlimit']
+        self.scale = bidder_configs[name]['scale']
+        self.shift = bidder_configs[name]['shift']
+        self.full_info_imp = True
+
+        # piecewise linear approximation of the logarithmic function
+        self.x_pts = np.linspace(-self.flowlimit, self.flowlimit, 10)
+        self.y_pts = np.log(self.x_pts - self.shift)
+        self.xl = self.x_pts[:-1]
+        self.xu = self.x_pts[1:]
+        self.yl = np.log(self.xl - self.shift)
+        self.yu = np.log(self.xu - self.shift)
+        self.slope = (self.yu - self.yl) / (self.xu - self.xl)
+
+        self.value_model = self.__get_value_model()
+
+
+    def __neg_utility_func(self, x, price):
+        return -self.get_value(x) + np.dot(price, x)        
+
+
+    def add_model(self, model: gp.Model):
+        x = model.addVars([i for i in range(self.intervals)], name=f'{self.name}_x', vtype=GRB.CONTINUOUS, lb=-self.flowlimit, ub=self.flowlimit)
+
+        y = model.addVars([i for i in range(self.intervals)], name=f'{self.name}_y', vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY)
+        [[model.addConstr(y[i] <= self.yl[j] + (x[i] - self.xl[j])*self.slope[j]) for j in range(len(self.xl))] for i in range(self.intervals)]
+
+        return x, gp.quicksum(y[i]*(self.scale+np.random.rand(1)*0.1) for i in range(self.intervals))
+
+
+    def bundle_query(self, price):
+        res = opt.minimize(self.__neg_utility_func, x0=np.zeros(self.intervals), args=(price), constraints=[], bounds=[(-self.flowlimit, self.flowlimit)]*self.intervals)
+        return res.x, -res.fun + np.dot(price, res.x)
+
+
+    def __get_value_model(self, ):
+        valuemodel = gp.Model('Value model')
+        valuemodel.setParam('OutputFlag', 0)
+        xvar, obj = self.add_model(valuemodel)
+        [valuemodel.addConstr(xvar[i] == 0, name=f'valuecon_{i}') for i in range(self.intervals)]
+        valuemodel.setObjective(obj, GRB.MAXIMIZE)
+        valuemodel.update()
+        return valuemodel
+    
+
+    def get_value(self, x):
+        for i in range(self.intervals):
+            self.value_model.getConstrByName(f'valuecon_{i}').RHS = x[i]
+        self.value_model.update()
+        self.value_model.optimize()
+
+        return self.value_model.getObjective().getValue()
+        # return np.sum(np.log(x[i] - self.shift) for i in range(self.intervals))*self.scale
+
+
+    def get_capacity_generic_goods(self, ):
+        return np.array([self.flowlimit]*self.intervals)

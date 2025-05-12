@@ -18,7 +18,7 @@ mvnn_params = {
     'epochs': 100,
     'l2_reg': .0001,
     'learning_rate': 0.005,
-    'print_frequency': 1,
+    'print_frequency': 101,
 
     'num_hidden_layers': 2,
     'num_hidden_units': 20,
@@ -62,6 +62,6 @@ mvnn_params_big = {
     'init_little_const': 0.1,
 }
 
-prosumer_configs = json.load(open('configs/prosumer_configs.json'))
+bidder_configs = json.load(open('configs/bidder_configs.json'))
 asset_configs = json.load(open('configs/asset_configs.json'))
 community_configs = json.load(open('configs/community_configs.json'))

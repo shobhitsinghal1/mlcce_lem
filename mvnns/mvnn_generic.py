@@ -43,7 +43,7 @@ class MVNN_GENERIC(nn.Module):
         generic_trafo_layer = nn.Linear(in_features = input_dim,
                                         out_features = input_dim,
                                         bias = False)
-        generic_trafo_layer_weight = np.diag(1/self.capacity_generic_goods)
+        generic_trafo_layer_weight = np.diag(1/(self.capacity_generic_goods+1e-5)) # small constant for numerical sanity
         generic_trafo_layer_weight = generic_trafo_layer_weight.astype(np.float32)
         generic_trafo_layer.weight.data = torch.from_numpy(generic_trafo_layer_weight)
         for param in generic_trafo_layer.parameters():

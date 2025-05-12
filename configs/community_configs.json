@@ -1,5 +1,12 @@
 {
     "community1": {
-        "prosumers": ["retailer", "a", "b", "c"]
+        "bidders": ["a", "b", "c"],
+        "price_init": [[100, 100], [50, 50], [200, 200], [0, 0], [-200, -200], [-100, -100], [-50, -50]],
+        "price_max": 1000
+    },
+    "dummy_logarithmic_community": {
+        "bidders": ["bidder1", "bidder2", "bidder3", "bidder4", "bidder5"],
+        "price_init": [[100, 100, 100, 100], [50, 50, 50, 50], [200, 200, 200, 200], [0, 0, 0, 0], [-200, -200, -200, -200], [-100, -100, -100, -100], [-50, -50, -50, -50]],
+        "price_max": 1000
     }
 }

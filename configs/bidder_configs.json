@@ -1,0 +1,49 @@
+{
+    "retailer": {
+        "assets": ["load0", "grid"]
+    },
+    "a": {
+        "assets": ["storage1"]
+    },
+    "b": {
+        "assets": ["load2", "storage2"]
+    },
+    "c": {
+        "assets": ["load2", "solar2", "storage3"]
+    },
+    "bidder1": {
+        "intervals": 4,
+        "flowlimit": 1,
+        "scale": 1,
+        "shift": -1.5,
+        "type": "LogarithmicBidder"
+    },
+    "bidder2": {
+        "intervals": 4,
+        "flowlimit": 5,
+        "scale": 1,
+        "shift": -7.5,
+        "type": "LogarithmicBidder"
+    },
+    "bidder3": {
+        "intervals": 4,
+        "flowlimit": 10,
+        "scale": 1,
+        "shift": -15,
+        "type": "LogarithmicBidder"
+    },
+    "bidder4": {
+        "intervals": 4,
+        "flowlimit": 8,
+        "scale": 1,
+        "shift": -12,
+        "type": "LogarithmicBidder"
+    },
+    "bidder5": {
+        "intervals": 4,
+        "flowlimit": 2,
+        "scale": 1,
+        "shift": -3,
+        "type": "LogarithmicBidder"
+    }
+}

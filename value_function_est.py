@@ -13,8 +13,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 # Own Libs
-from prosumer import Prosumer
-from test_classes import logarithmic_bidder
+from prosumer import Prosumer, LogarithmicBidder
 from utils import *
 from mvnns.mvnn_generic import MVNN_GENERIC
 from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX
@@ -59,7 +58,7 @@ class ValueFunctionEstimateDQ():
             self.max_util_mvnn_model.update_prices_in_objective(price_vector.cpu().numpy()[0])
             try:
                 predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
-                if np.any(np.abs(predicted_demand)>self.capacity_generic_goods):
+                if np.any(np.abs(predicted_demand)-self.capacity_generic_goods>self.mip_params['FeasibilityTol']*10):
                     print(f'domain violated: {predicted_demand}')
                 predicted_demand = np.array(predicted_demand)
             except:
@@ -316,8 +315,8 @@ class ValueFunctionEstimateDQ():
         epochs = self.mvnn_params['epochs'] 
         l2_reg = self.mvnn_params['l2_reg']
         learning_rate = self.mvnn_params['learning_rate']
-        clip_grad_norm = self.mvnn_params['clip_grad_norm']
         print_frequency = self.mvnn_params['print_frequency']
+
 
         # get the data
         P_train, P_val, X_train, X_val, _, V_val = self.__get_scaled_data_split()
@@ -355,12 +354,12 @@ class ValueFunctionEstimateDQ():
         # else:
         #     val_loader_gen_only = None
 
-        print('Creating MVNN model with parameters:')
-        print(f'num_hidden_layers: {self.mvnn_params['num_hidden_layers']}')
-        print(f'num_hidden_units: {self.mvnn_params['num_hidden_units']}')
-        print(f'regularisation: {l2_reg}')
-        print(f'learning_rate: {learning_rate}')
-        print(f'clip_grad_norm: {clip_grad_norm}')
+        # print('Creating MVNN model with parameters:')
+        # print(f'num_hidden_layers: {self.mvnn_params['num_hidden_layers']}')
+        # print(f'num_hidden_units: {self.mvnn_params['num_hidden_units']}')
+        # print(f'regularisation: {l2_reg}')
+        # print(f'learning_rate: {learning_rate}')
+        # print(f'clip_grad_norm: {clip_grad_norm}')
 
         model = MVNN_GENERIC(input_dim=len(self.capacity_generic_goods),
                             num_hidden_layers=self.mvnn_params['num_hidden_layers'],
@@ -432,7 +431,7 @@ class ValueFunctionEstimateDQ():
             #             "epochs": epoch})
 
             # TODO: remove later since we have W&B
-            if epoch % print_frequency == 0:
+            if (epoch+1) % print_frequency == 0:
                 if val_loader_demand_queries is not None:
                     print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}, val_dq_loss_scaled:{val_metrics["val_dq_loss_scaled"]:.5f}')
                         #    , val_kendall_tau:{val_metrics["kendall_tau"]:.5f}, val_r2_centered: {val_metrics["r2_centered"]:.5f}, val_mean_regret:{val_metrics["mean_regret"]:.5f},') val_r2:{val_metrics["r2"]:.5f}, , val_mae:{val_metrics["mae"]:.5f}
@@ -447,7 +446,7 @@ class ValueFunctionEstimateDQ():
         Get the value of a bundle using the learned value function.
         """
         self.trained_model.eval()
-        return self.trained_model(bundle) * self.price_scale
+        return self.trained_model(torch.from_numpy(bundle).float()).detach().numpy() * self.price_scale
 
 
     def get_max_util_bundle(self, price: np.ndarray) -> np.ndarray:
@@ -469,7 +468,7 @@ if __name__ == "__main__":
     intervals = 2
     price_scale = 100
 
-    # bidder = logarithmic_bidder(intervals, 1, scale=price_scale)
+    # bidder = LogarithmicBidder(intervals, 1, scale=price_scale)
     bidder = Prosumer('c')
     estimator = ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params, mip_params, price_scale=price_scale)
     price_list = [np.random.rand(intervals)*2*price_scale-price_scale for i in range(100)]
