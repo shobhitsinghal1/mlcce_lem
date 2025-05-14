@@ -7,14 +7,14 @@ mip_params = {
     'IntFeasTol': 1e-6,
     'MIPGap': 1e-6,
     'outputFlag': 1,
-    'DualReductions': 0, #1--------------
+    'DualReductions': 1, #1--------------
 }
 
 mvnn_params = {
     'clip_grad_norm': 1,
     'use_gradient_clipping': True,
     'train_split': 0.8,
-    'batch_size': 1,
+    'batch_size': 10,
     'epochs': 100,
     'l2_reg': .0001,
     'learning_rate': 0.005,
@@ -24,7 +24,7 @@ mvnn_params = {
     'num_hidden_units': 20,
     'layer_type': 'MVNNLayerReLUProjected',
     'target_max': 1,
-    'lin_skip_connection': False,
+    'lin_skip_connection': True,
     'dropout_prob': 0,
     'init_method': 'custom',
     'random_ts': [0, 1],

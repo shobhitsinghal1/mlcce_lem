@@ -28,7 +28,7 @@ class Bidder(ABC):
 
 class Prosumer(Bidder):
     def __init__(self, prosumer: str):
-        self.prosumer_config = prosumer_configs[prosumer]
+        self.prosumer_config = bidder_configs[prosumer]
         self.asset_configs = asset_configs
         self.asset_configs_by_type = self.__group_configs_by_type()
         self.dq_model = self.__construct_demand_query_model()
@@ -254,7 +254,7 @@ class LogarithmicBidder(Bidder):
         self.full_info_imp = True
 
         # piecewise linear approximation of the logarithmic function
-        self.x_pts = np.linspace(-self.flowlimit, self.flowlimit, 10)
+        self.x_pts = np.linspace(-self.flowlimit, self.flowlimit, 100)
         self.y_pts = np.log(self.x_pts - self.shift)
         self.xl = self.x_pts[:-1]
         self.xu = self.x_pts[1:]
@@ -275,7 +275,7 @@ class LogarithmicBidder(Bidder):
         y = model.addVars([i for i in range(self.intervals)], name=f'{self.name}_y', vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY)
         [[model.addConstr(y[i] <= self.yl[j] + (x[i] - self.xl[j])*self.slope[j]) for j in range(len(self.xl))] for i in range(self.intervals)]
 
-        return x, gp.quicksum(y[i]*(self.scale+np.random.rand(1)*0.1) for i in range(self.intervals))
+        return x, gp.quicksum(y[i]*self.scale for i in range(self.intervals))
 
 
     def bundle_query(self, price):

@@ -42,10 +42,10 @@ class ValueFunctionEstimateDQ():
         use_gradient_clipping = self.mvnn_params['use_gradient_clipping']
 
         model.train()
-        loss_dq_list = []
+        # loss_dq_list = []
 
-        for batch_idx, (demand_vector, price_vector) in enumerate(train_loader_demand_queries):
-            price_vector, demand_vector = price_vector.to(device), demand_vector.to(device)
+        for batch_idx, (demand_vectors, price_vectors) in enumerate(train_loader_demand_queries):
+            price_vectors, demand_vectors = price_vectors.to(device), demand_vectors.to(device)
             optimizer.zero_grad()
 
             #--------------------------------
@@ -55,41 +55,46 @@ class ValueFunctionEstimateDQ():
 
             # compute the network's predicted answer to the demand query
             self.max_util_mvnn_model.update_model(model)
-            self.max_util_mvnn_model.update_prices_in_objective(price_vector.cpu().numpy()[0])
-            try:
-                predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
-                if np.any(np.abs(predicted_demand)-self.capacity_generic_goods>self.mip_params['FeasibilityTol']*10):
-                    print(f'domain violated: {predicted_demand}')
-                predicted_demand = np.array(predicted_demand)
-            except:
-                print('--- MIP is unbounded, skipping this sample! ---')
-                continue
 
-            # get the predicted value for that answer
-            predicted_value = model(torch.from_numpy(predicted_demand).float())
+            # computing loss
+            loss = 0
+            for price_vector, demand_vector in zip(price_vectors, demand_vectors):
+                self.max_util_mvnn_model.update_prices_in_objective(price_vector.cpu().numpy())
+                try:
+                    predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
+                    if np.any(np.abs(predicted_demand)-self.capacity_generic_goods>self.mip_params['FeasibilityTol']*10):
+                        print(f'domain violated: {predicted_demand}')
+                except:
+                    print('--- MIP is unbounded, skipping this sample! ---')
+                    continue
 
-            predicted_utility = predicted_value - torch.dot(price_vector.flatten(), torch.from_numpy(predicted_demand).to(device).float())
+                # get the predicted value for that answer
+                predicted_value = model(torch.from_numpy(predicted_demand).float())
 
-            # get the predicted utility for the actual demand vector
-            predicted_value_at_true_demand = model(demand_vector)
+                predicted_utility = predicted_value - torch.dot(price_vector, torch.from_numpy(predicted_demand).to(device).float())
 
-            predicted_utility_at_true_demand = predicted_value_at_true_demand - torch.dot(price_vector.flatten(), demand_vector.flatten())
+                # get the predicted utility for the actual demand vector
+                predicted_value_at_true_demand = model(demand_vector)
+
+                predicted_utility_at_true_demand = predicted_value_at_true_demand - torch.dot(price_vector, demand_vector)
 
 
-            # compute the loss
-            predicted_utility_difference = predicted_utility - predicted_utility_at_true_demand
-            if predicted_utility_difference < -self.mip_params['MIPGap']*10: #if the difference is significant compared to the MIP solution tolerance
-                print(f'predicted utility difference is negative: {predicted_utility_difference}, something is wrong!')
+                # compute the loss
+                predicted_utility_difference = predicted_utility - predicted_utility_at_true_demand
+                if predicted_utility_difference < -self.mip_params['MIPGap']*10: #if the difference is significant compared to the MIP solution tolerance
+                    print(f'predicted utility difference is negative: {predicted_utility_difference}, something is wrong!')
 
-            loss = torch.relu(predicted_utility_difference)   # for numerical stability
-            loss_dq_list.append(loss.detach().numpy())
+                loss += torch.relu(predicted_utility_difference)   # for numerical stability
+            
+            
+            loss = loss / len(price_vectors)
             loss.backward()
 
             if use_gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
 
-        return np.mean(loss_dq_list)
+        return loss.detach().numpy()
 
 
     def __dq_val_mvnn(self, trained_model, val_loader, device):
@@ -309,21 +314,20 @@ class ValueFunctionEstimateDQ():
         Train a new MVNN model using the bundle query data and return the trained model and validation metrics.
         """
 
-        batch_size = self.mvnn_params['batch_size']
-        if batch_size != 1:
-            raise NotImplementedError('batch_size != 1 is not implemented yet')
+        # get the data
+        P_train, P_val, X_train, X_val, _, V_val = self.__get_scaled_data_split()
+
+
+        if type(self.mvnn_params['batch_size']) == str:
+            batch_size = len(P_train)
+        else:
+            batch_size = self.mvnn_params['batch_size']
+        # if batch_size != 1:
+        #     raise NotImplementedError('batch_size != 1 is not implemented yet')
         epochs = self.mvnn_params['epochs'] 
         l2_reg = self.mvnn_params['l2_reg']
         learning_rate = self.mvnn_params['learning_rate']
         print_frequency = self.mvnn_params['print_frequency']
-
-
-        # get the data
-        P_train, P_val, X_train, X_val, _, V_val = self.__get_scaled_data_split()
-        
-        # induced_values = []
-        # for i in range(len(P_train)):
-        #     induced_values.append(np.dot(P_train[i], X_train[i]))
 
 
         train_dataset_demand_queries = torch.utils.data.TensorDataset(torch.from_numpy(X_train).float(),
@@ -336,7 +340,7 @@ class ValueFunctionEstimateDQ():
                                                                         torch.from_numpy(P_val).float(),
                                                                         torch.from_numpy(V_val).float())
             val_loader_demand_queries = torch.utils.data.DataLoader(val_dataset_demand_queries,
-                                                                    batch_size= batch_size,
+                                                                    batch_size= 1,
                                                                     shuffle=True)
         else:
             val_loader_demand_queries = None
@@ -378,6 +382,7 @@ class ValueFunctionEstimateDQ():
                             init_little_const = self.mvnn_params['init_little_const'],
                             capacity_generic_goods=self.capacity_generic_goods
                             )
+        self.trained_model = model #update the trained model
 
 
         # make sure ts have no regularisation (the bigger t the more regular)
@@ -408,7 +413,6 @@ class ValueFunctionEstimateDQ():
                                                         train_loader_demand_queries,
                                                         device=torch.device('cpu')
                                                         )
-            self.trained_model = model #update the trained model
             if val_loader_demand_queries is not None:
                 val_metrics = self.__dq_val_mvnn(trained_model = model,
                                                  val_loader = val_loader_demand_queries,
@@ -421,22 +425,13 @@ class ValueFunctionEstimateDQ():
                 metrics[epoch] = {}
             metrics[epoch]["train_dq_loss_scaled"] = train_loss_dq
 
-            # if wandb_tracking:
-            #     wandb.log({f"Bidder_{bidder.id}_train_loss_dq": train_loss_dq, 
-            #             f"Bidder_{bidder.id}_val_loss_dq": val_metrics["scaled_dq_loss"], 
-            #             f"Bidder_{bidder.id}_mean_regret": val_metrics["mean_regret"], 
-            #             f"Bidder_{bidder.id}_val_r2": val_metrics["r2"], 
-            #             f"Bidder_{bidder.id}_val_KT": val_metrics["kendall_tau"], 
-            #             f"Bidder_{bidder.id}_val_MAE": val_metrics["mae"],
-            #             "epochs": epoch})
-
-            # TODO: remove later since we have W&B
-            if (epoch+1) % print_frequency == 0:
-                if val_loader_demand_queries is not None:
-                    print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}, val_dq_loss_scaled:{val_metrics["val_dq_loss_scaled"]:.5f}')
-                        #    , val_kendall_tau:{val_metrics["kendall_tau"]:.5f}, val_r2_centered: {val_metrics["r2_centered"]:.5f}, val_mean_regret:{val_metrics["mean_regret"]:.5f},') val_r2:{val_metrics["r2"]:.5f}, , val_mae:{val_metrics["mae"]:.5f}
-                else: 
-                    print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}')
+            # # TODO: remove later since we have W&B
+            # if (epoch+1) % print_frequency == 0:
+            #     if val_loader_demand_queries is not None:
+            #         print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}, val_dq_loss_scaled:{val_metrics["val_dq_loss_scaled"]:.5f}')
+            #             #    , val_kendall_tau:{val_metrics["kendall_tau"]:.5f}, val_r2_centered: {val_metrics["r2_centered"]:.5f}, val_mean_regret:{val_metrics["mean_regret"]:.5f},') val_r2:{val_metrics["r2"]:.5f}, , val_mae:{val_metrics["mae"]:.5f}
+            #     else: 
+            #         print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}')
         
         return model, metrics
 

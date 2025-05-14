@@ -15,7 +15,7 @@ class CommunityManager:
         assert len(set([b.intervals for b in self.bidders]))==1, "All bidders must have the same number of intervals"
 
         capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
-        self.mlcce = MLCCE([np.array(self.community_config["price_init"][i]) for i in range(len(self.community_config['price_init']))], self.query_bundle, len(self.bidders), price_max=self.community_config["price_max"], capacities=capacities)
+        self.mlcce = MLCCE([np.array(self.community_config["price_init"][i]) for i in range(len(self.community_config['price_init']))], self.query_bundle, len(self.bidders), price_max=self.community_config["price_max"], capacities=capacities, imbalance_tol_coef=self.community_config["imbalance_tol_coef"])
 
         self.full_info_mip = None
 
@@ -40,10 +40,10 @@ class CommunityManager:
             dispatch_variables.append(x)
             objexpr += obj
         self.full_info_mip.setObjective(objexpr, GRB.MAXIMIZE)
-        [self.full_info_mip.addConstr(gp.quicksum(b.dispatch_variables[i] for b in self.bidders)==0, name=f"balance_{i}") for i in range(self.bidders[0].intervals)]
+        [self.full_info_mip.addConstr(gp.quicksum(dispatch_variables[j][i] for j in range(len(self.bidders)))==0, name=f"balance_{i}") for i in range(self.bidders[0].intervals)]
         self.full_info_mip.optimize()
 
-        dispatch_bundles = [np.array([b.dispatch_variables[i].x for i in range(b.intervals)]) for b in self.bidders]
+        dispatch_bundles = [np.array([dispatch_variables[j][i].x for i in range(b.intervals)]) for j in range(len(self.bidders))]
         clearing_price = np.array([self.full_info_mip.getConstrByName(f"balance_{i}").Pi for i in range(self.bidders[0].intervals)])
 
         return clearing_price, dispatch_bundles
@@ -56,5 +56,9 @@ class CommunityManager:
 
 if __name__ == "__main__":
     community_manager = CommunityManager("dummy_logarithmic_community")
-    # price, bundles = community_manager.get_full_info_clearing()
+    price, bundles = community_manager.get_full_info_clearing()
+    print('Full info clearing price:', price)
+    print('Dispatch:')
+    [print(bundles[i]) for i in range(len(bundles))]
+    
     community_manager.clear_market()
