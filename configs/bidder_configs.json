@@ -8,11 +8,11 @@
         "type": "Prosumer"
     },
     "b": {
-        "assets": ["load2", "storage2"],
+        "assets": ["load2"],
         "type": "Prosumer"
     },
     "c": {
-        "assets": ["solar1"],
+        "assets": ["load2", "solar1"],
         "type": "Prosumer"
     },
     "bidder1": {

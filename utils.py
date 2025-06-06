@@ -13,7 +13,7 @@ mip_params = {
 next_price_params = {
     'method': 'SLSQP',
     'trust_region_radius_coef': 0.25,
-    'trust_region_decay_pow': 0,
+    'trust_region_decay_pow': -0,
     'base_learning_rate': 1,
     'lr_decay': 0.02,
     'max_iter': 1000,

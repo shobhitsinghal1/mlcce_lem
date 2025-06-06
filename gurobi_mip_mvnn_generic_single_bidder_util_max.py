@@ -53,7 +53,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # BOX-bounds for y variable (preactivated!!!!) as column vectors
 
         # Initialize
-        input_upper_bounds = np.array(self.trained_model.capacity_generic_goods, dtype=np.int64).reshape(-1, 1)
+        input_upper_bounds = np.array(self.trained_model.capacity_generic_goods).reshape(-1, 1)
         self.upper_box_bounds = [input_upper_bounds]
         self.lower_box_bounds = [-input_upper_bounds] #C: lb
 
@@ -268,6 +268,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
     def update_prices_in_objective(self, price: np.ndarray):
         self.price = price
         self.mip.setObjective(self.y_variables[-1][0] - gp.quicksum(self.y_variables[0][i] * price[i] for i in range(len(price))), GRB.MAXIMIZE)
+        self.mip.update()
         return
 
 
@@ -301,7 +302,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # test try-catch for non-feasible solution
         try:
             for i in range(len(self.y_variables[0])):
-                self.optimal_schedule.append(self.y_variables[0][i].x) # TODO: check if this is correct
+                self.optimal_schedule.append(self.y_variables[0][i].x)
         except:
             self.mip.write('mip_mvnn_generic_single_bidder_ilp.ilp')
             self.__print_info()

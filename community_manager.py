@@ -58,9 +58,12 @@ class CommunityManager:
 
         dispatch_bundles = [np.array([dispatch_variables[j][i].getAttr('x') for i in range(self.horizon)]) for j in range(len(self.bidders))]
         
-        fixedmodel = self.full_info_mip.fixed()        
-        fixedmodel.optimize()
-        clearing_price = np.array([fixedmodel.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
+        if self.full_info_mip.IsMIP:
+            fixedmodel = self.full_info_mip.fixed()        
+            fixedmodel.optimize()
+            clearing_price = np.array([fixedmodel.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
+        else:
+            clearing_price = np.array([self.full_info_mip.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
 
 
         return clearing_price, dispatch_bundles
