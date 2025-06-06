@@ -8,31 +8,42 @@ from codetiming import Timer
 
 #own libs
 from value_function_est import ValueFunctionEstimateDQ
-from utils import mvnn_params, mip_params
+from utils import mvnn_params, mip_params, next_price_params
 
 
 class MLCCE:
-    def __init__(self, price_init: list, query_func: callable, num_participants: int, price_max: float, capacities: list, imbalance_tol_coef: float):
+    def __init__(self, price_init: list[np.ndarray], query_func: callable, num_participants: int, price_max: float, capacities: list, imbalance_tol_coef: float, bidders: list = None):
         """
         :param query_func: function to query the utility maximizing bundle from participants - returns a list of bundles
         """
         self.queried_bundles = [] # list (clock iterations) of list (prosumers) of queried bundles
         self.queried_values = [] # list (clock iterations) of list (prosumers) of true values
-        self.price_iterates = [price_init[i] for i in range(len(price_init))]
-        self.value_estimator_metrics = [{'train_dq_loss_scaled': [], 'val_dq_loss_scaled': [], 'r2_centered': []} for i in range(num_participants)]
-        self.bundle_query = query_func # returns list of bundles and list of true values
+        self.price_iterates = price_init
         self.num_participants = num_participants
         self.imbalance_tol = np.sum(capacities, 0)*imbalance_tol_coef
+        self.value_estimator_metrics = [{'train_dq_loss_scaled': [], 'val_dq_loss_scaled': [], 'r2_centered': []} for i in range(num_participants)]
+        
+        self.bundle_query = query_func # returns list of bundles and list of true values
         self.value_estimators = [ValueFunctionEstimateDQ(capacity_generic_goods=capacities[i],
                                                          mvnn_params=mvnn_params,
                                                          mip_params=mip_params,
                                                          price_scale=price_max) for i in range(num_participants)]
+        self.capacities = capacities
+        self.bidders = bidders # only for plotting the estimated and true value functions
         self.price_max = price_max
         self.eq_tol = 1e-3
         self.mlcce_iter = 0
 
+        self.next_price_params = next_price_params
+
         self.train_timer = Timer('train_timer', logger=None)
         self.next_price_timer = Timer('next_price_timer', logger=None)
+
+
+    def __get_pred_imb(self, price: np.ndarray) -> np.ndarray:
+        predicted_bundles = [value_estimator.get_max_util_bundle(price) for value_estimator in self.value_estimators]
+        pred_imb = np.sum(predicted_bundles, 0)
+        return pred_imb
 
 
     def __next_price(self, ):
@@ -50,8 +61,55 @@ class MLCCE:
             payments = np.array([np.dot(price, bundle) for bundle in predicted_bundles])
             return np.sum(predicted_values - payments) # sum over all participants
         
-        solution = opt.minimize(objective, self.price_iterates[-1], method='SLSQP', jac=gradient, bounds=[(-self.price_max, self.price_max)]*len(self.price_iterates[-1]))
+        initial_price = self.price_iterates[-1]
+        trust_region_rad = self.next_price_params['trust_region_radius_coef']*self.price_max*np.pow(self.mlcce_iter+1, self.next_price_params['trust_region_decay_pow'])
+        bounds=[(self.price_iterates[-1][i]-trust_region_rad, 
+                 self.price_iterates[-1][i]+trust_region_rad) for i in range(len(self.price_iterates[-1]))]
+        solution = opt.minimize(objective, initial_price, jac=gradient, bounds=bounds, method=self.next_price_params['method'])
+
+        pred_imb = self.__get_pred_imb(solution.x)
+        print(f'Predicted imbalance: {pred_imb}')
+        
         return solution.x
+
+
+        # def pred_imbalance(bundles: list) -> float:
+        #     return np.abs(np.sum(bundles, 0))
+
+        # price_iterates = [np.multiply(self.price_iterates[-1], np.random.uniform(1, 1, len(self.price_iterates[-1])))]
+        # best_iter = {'W': np.inf, 'price': None}
+        # bbest_iter = {'W': np.inf, 'price': None, 'imb': np.array([np.inf]*len(self.price_iterates[-1]))}
+
+        # lr = self.next_price_params['base_learning_rate']
+        # decay = self.next_price_params['lr_decay']
+        
+        # # for t in range(self.next_price_params['max_iter']):
+        # while True:
+        #     predicted_bundles = [value_estimator.get_max_util_bundle(price_iterates[-1]) for value_estimator in self.value_estimators]
+        #     predicted_utilities = np.array([value_estimator.get_bundle_value(bundle) - np.dot(price_iterates[-1], bundle) for value_estimator, bundle in zip(self.value_estimators, predicted_bundles)])
+            
+        #     W = np.sum(predicted_utilities)
+        #     if W < best_iter['W']:
+        #         best_iter['W'] = W
+        #         best_iter['price'] = price_iterates[-1]
+        #     else:
+        #         lr = lr * (1 - decay)
+            
+        #     if np.all(pred_imbalance(predicted_bundles) < bbest_iter['imb']):
+        #         bbest_iter['W'] = W
+        #         bbest_iter['price'] = price_iterates[-1]
+        #         bbest_iter['imb'] = pred_imbalance(predicted_bundles)
+        #     else:    
+        #         lr = lr * (1 - decay)
+
+        #     grad = -np.sum(predicted_bundles, axis=0)
+        #     print(np.linalg.norm(grad))
+        #     print(lr)
+        #     if np.linalg.norm(grad) < 1e-3:
+        #         break
+        #     price_iterates.append(price_iterates[-1] - lr * grad)
+
+        # return bbest_iter['price']
 
 
     def __is_equilibrium(self, ):
@@ -121,6 +179,8 @@ class MLCCE:
                                                                  title="R2 Centered",
                                                                  xname="MLCCE iteration"
                                                                 )})
+        
+        [estimator.plot_nn(bidder, wandb_run=run) for bidder, estimator in zip(self.bidders, self.value_estimators)]
 
 
     @profile
@@ -144,7 +204,8 @@ class MLCCE:
             self.queried_bundles.append(bundle_queries)
             self.queried_values.append(true_values)
 
-            print(f'MLCCE iteration {self.mlcce_iter}: Price: {self.price_iterates[-1]}. Imbalance product-wise: {np.sum(bundle_queries, 0)}')
+            imb = np.sum(bundle_queries, 0)
+            print(f'MLCCE iteration {self.mlcce_iter}: Price: {self.price_iterates[-1]}. Imbalance product-wise: {imb}')
 
 
             if self.__is_equilibrium():
@@ -161,7 +222,10 @@ class MLCCE:
                     self.value_estimator_metrics[i]['r2_centered'].append(metrics[list(metrics)[-1]]['r2_centered'])
             
             with self.next_price_timer:
-                self.price_iterates.append(self.__next_price())
+                noise_scale = np.abs(self.__get_pred_imb(self.price_iterates[-1]) - np.abs(np.sum(bundle_queries, 0))) * self.price_max / np.sum(self.capacities, 0)
+                noise = np.random.normal(0, noise_scale/(self.mlcce_iter+1), len(self.price_iterates[-1]))
+                price = np.clip(self.__next_price() + noise, -self.price_max, self.price_max)
+                self.price_iterates.append(price)
                 self.mlcce_iter += 1
         
             if self.mlcce_iter%5==0:

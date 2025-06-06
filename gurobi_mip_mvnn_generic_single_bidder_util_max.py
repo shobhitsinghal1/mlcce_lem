@@ -7,6 +7,8 @@ import numpy as np
 import io
 import contextlib
 
+from utils import gurobi_status_converter
+
 #%% NEW SUCCINCT MVNN MIP FOR CALCULATING MAX UTILITY BUNDLE FOR SINGLE BIDDER: argmax_x {MVNN_i(x)-p*x}
 class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
@@ -242,7 +244,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         print('')
         print('MIP SOLUTION:')
         print(*['-']*30)
-        print(f'Status: {self.__status_converter(self.mip.status)}')
+        print(f'Status: {gurobi_status_converter(self.mip.status)}')
         print(f'Elapsed in sec: {self.end - self.start}')
         print(f'Reached Relative optimality gap: {self.mip.MIPGap}')   
         print(f'Optimal Allocation: {self.optimal_schedule}')
@@ -252,11 +254,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         for k, v in self.case_counter.items():
             print(f' - {k}: {v}')
         print(*['*']*30)
-
-
-    def __status_converter(self, int_status):
-        status_table = ['woopsies!', 'LOADED', 'OPTIMAL', 'INFEASIBLE', 'INF_OR_UNBD', 'UNBOUNDED', 'CUTOFF', 'ITERATION_LIMIT', 'NODE_LIMIT', 'TIME_LIMIT', 'SOLUTION_LIMIT', 'INTERRUPTED', 'NUMERIC', 'SUBOPTIMAL', 'INPROGRESS', 'USER_OBJ_LIMIT']
-        return status_table[int_status]
 
 
     def __model_sense_converter(self, int_sense):

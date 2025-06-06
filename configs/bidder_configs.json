@@ -1,6 +1,6 @@
 {
     "retailer": {
-        "assets": ["load0", "grid"],
+        "assets": ["retailer0", "grid"],
         "type": "Prosumer"
     },
     "a": {
@@ -12,42 +12,56 @@
         "type": "Prosumer"
     },
     "c": {
-        "assets": ["load2", "solar2", "storage3"],
+        "assets": ["solar1"],
         "type": "Prosumer"
     },
     "bidder1": {
-        "intervals": 4,
         "flowlimit": 1,
         "scale": 100,
         "shift": -1.5,
+        "granularity": 20,
         "type": "LogarithmicBidder"
     },
     "bidder2": {
-        "intervals": 4,
         "flowlimit": 5,
         "scale": 100,
         "shift": -7.5,
+        "granularity": 20,
         "type": "LogarithmicBidder"
     },
     "bidder3": {
-        "intervals": 4,
         "flowlimit": 10,
         "scale": 100,
         "shift": -15,
+        "granularity": 20,
         "type": "LogarithmicBidder"
     },
     "bidder4": {
-        "intervals": 4,
         "flowlimit": 8,
         "scale": 100,
         "shift": -12,
+        "granularity": 20,
         "type": "LogarithmicBidder"
     },
     "bidder5": {
-        "intervals": 4,
         "flowlimit": 2,
         "scale": 100,
         "shift": -3,
+        "granularity": 20,
+        "type": "LogarithmicBidder"
+    },
+    "bidder1_1": {
+        "flowlimit": 1,
+        "scale": 100,
+        "shift": -1.1,
+        "granularity": 100,
+        "type": "LogarithmicBidder"
+    },
+    "bidder2_1": {
+        "flowlimit": 5,
+        "scale": 100,
+        "shift": -5.1,
+        "granularity": 100,
         "type": "LogarithmicBidder"
     }
 }

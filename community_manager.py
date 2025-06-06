@@ -11,11 +11,17 @@ class CommunityManager:
     def __init__(self, community: str):
         self.community = community
         self.community_config = community_configs[community]
-        self.bidders = [eval(bidder_configs[b]['type'])(b) for b in self.community_config["bidders"]]
-        assert len(set([b.intervals for b in self.bidders]))==1, "All bidders must have the same number of intervals"
+        self.horizon = self.community_config["horizon"]
+        self.bidders = [eval(bidder_configs[b]['type'])(b, self.horizon) for b in self.community_config["bidders"]]
 
         capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
-        self.mlcce = MLCCE([np.array(self.community_config["price_init"][i]) for i in range(len(self.community_config['price_init']))], self.query_bundle, len(self.bidders), price_max=self.community_config["price_max"], capacities=capacities, imbalance_tol_coef=self.community_config["imbalance_tol_coef"])
+        self.mlcce = MLCCE([np.array(self.community_config["price_init"][i]) for i in range(len(self.community_config['price_init']))],
+                           self.query_bundle, 
+                           len(self.bidders), 
+                           price_max=self.community_config["price_max"], 
+                           capacities=capacities, 
+                           imbalance_tol_coef=self.community_config["imbalance_tol_coef"],
+                           bidders = self.bidders)
 
         self.full_info_mip = None
 
@@ -30,6 +36,7 @@ class CommunityManager:
             bundles.append(bundle)
             values.append(value)
         return bundles, values
+
     
     def get_full_info_clearing(self, ) -> tuple:
         self.full_info_mip = gp.Model("Full information clearing MIP")
@@ -40,11 +47,21 @@ class CommunityManager:
             dispatch_variables.append(x)
             objexpr += obj
         self.full_info_mip.setObjective(objexpr, GRB.MAXIMIZE)
-        [self.full_info_mip.addConstr(gp.quicksum(dispatch_variables[j][i] for j in range(len(self.bidders)))==0, name=f"balance_{i}") for i in range(self.bidders[0].intervals)]
+        balance_constrs = [self.full_info_mip.addConstr(gp.quicksum(dispatch_variables[j][i] for j in range(len(self.bidders)))==0, name=f"balance_{i}") for i in range(self.horizon)] # couple all bidders by balance constraint
+        self.full_info_mip.update()
         self.full_info_mip.optimize()
 
-        dispatch_bundles = [np.array([dispatch_variables[j][i].x for i in range(b.intervals)]) for j in range(len(self.bidders))]
-        clearing_price = np.array([self.full_info_mip.getConstrByName(f"balance_{i}").Pi for i in range(self.bidders[0].intervals)])
+        if self.full_info_mip.status != 2:
+            self.full_info_mip.computeIIS()
+            self.full_info_mip.write("full_info_clearing.ilp")
+            raise ValueError(f"The problem is not feasible, status: {gurobi_status_converter(self.full_info_mip.status)}")
+
+        dispatch_bundles = [np.array([dispatch_variables[j][i].getAttr('x') for i in range(self.horizon)]) for j in range(len(self.bidders))]
+        
+        fixedmodel = self.full_info_mip.fixed()        
+        fixedmodel.optimize()
+        clearing_price = np.array([fixedmodel.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
+
 
         return clearing_price, dispatch_bundles
 
@@ -55,7 +72,7 @@ class CommunityManager:
         print(clearing_price)
 
 if __name__ == "__main__":
-    community_manager = CommunityManager("dummy_logarithmic_community")
+    community_manager = CommunityManager("community1")
     price, bundles = community_manager.get_full_info_clearing()
     print('Full info clearing price:', price)
     print('Dispatch:')

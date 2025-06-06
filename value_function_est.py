@@ -4,16 +4,16 @@ import torch
 import sklearn.metrics
 from scipy import stats as scipy_stats
 import wandb
-import time
-import logging
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from line_profiler import profile
+import optuna
+import time
 np.random.seed(0)
 torch.manual_seed(0)
 
 # Own Libs
-from prosumer import Prosumer, LogarithmicBidder
+from prosumer import Prosumer, LogarithmicBidder, Bidder
 from utils import *
 from mvnns.mvnn_generic import MVNN_GENERIC
 from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX
@@ -94,7 +94,7 @@ class ValueFunctionEstimateDQ():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
 
-        return loss.detach().numpy()
+        return loss.detach().numpy()[0]
 
 
     def __dq_val_mvnn(self, trained_model, val_loader, device):
@@ -413,17 +413,23 @@ class ValueFunctionEstimateDQ():
                                                         train_loader_demand_queries,
                                                         device=torch.device('cpu')
                                                         )
+            
             if val_loader_demand_queries is not None:
                 val_metrics = self.__dq_val_mvnn(trained_model = model,
                                                  val_loader = val_loader_demand_queries,
                                                  device=torch.device('cpu'))
-
-            scheduler.step()
-            if val_loader_demand_queries is not None:
                 metrics[epoch] = val_metrics
-            else: 
+            else:
                 metrics[epoch] = {}
             metrics[epoch]["train_dq_loss_scaled"] = train_loss_dq
+
+            scheduler.step()
+            
+            # if val_loader_demand_queries is not None and epoch>=2 and max(metrics[epoch-2]['val_dq_loss_scaled'], metrics[epoch-1]['val_dq_loss_scaled']) < metrics[epoch]['val_dq_loss_scaled']:  # an early stopping condition
+            #         break
+
+            # if epoch>=2 and max(metrics[epoch-2]['train_dq_loss_scaled'], metrics[epoch-1]['train_dq_loss_scaled']) < metrics[epoch]['train_dq_loss_scaled']:  # an early stopping condition
+            #     break
 
             # # TODO: remove later since we have W&B
             # if (epoch+1) % print_frequency == 0:
@@ -456,31 +462,10 @@ class ValueFunctionEstimateDQ():
         return self.max_util_mvnn_model.get_max_util_bundle()
 
 
-if __name__ == "__main__":
-    # unit test for value function estimator - fully substitute value function - 2 intervals
+    def plot_nn(self, bidder: Bidder, wandb_run = None):
+        assert len(self.capacity_generic_goods) == 2, "Plotting is only supported for 2D"
 
-    run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu')
-    intervals = 2
-    price_scale = 100
-
-    # bidder = LogarithmicBidder(intervals, 1, scale=price_scale)
-    bidder = Prosumer('c')
-    estimator = ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params, mip_params, price_scale=price_scale)
-    price_list = [np.random.rand(intervals)*2*price_scale-price_scale for i in range(100)]
-
-
-    queried_bundles = []
-    true_values = []
-    for i in range(len(price_list)):
-        bundle, value = bidder.bundle_query(price_list[i])
-        queried_bundles.append(bundle)
-        true_values.append(value)
-        estimator.add_data_point(price_list[i], bundle, value)
-    
-    model, metrics = estimator.dq_train_mvnn()
-
-    if intervals == 2:
-        bounds = bidder.get_capacity_generic_goods()
+        bounds = self.capacity_generic_goods
         x1 = np.linspace(-bounds[0], bounds[0], 50)
         x2 = np.linspace(-bounds[1], bounds[1], 50)
         x1, x2 = np.meshgrid(x1, x2)
@@ -489,7 +474,7 @@ if __name__ == "__main__":
         X3_true = []
         for x11, x22 in zip(X1, X2):
             bundle = np.array([x11, x22])
-            X3_pred.append(model.to(torch.float64)(torch.from_numpy(bundle)).detach().numpy()[0]*price_scale)
+            X3_pred.append(self.trained_model.to(torch.float64)(torch.from_numpy(bundle)).detach().numpy()[0]*self.price_scale)
             X3_true.append(bidder.get_value(bundle))
 
         X3_pred = np.array(X3_pred)
@@ -499,13 +484,72 @@ if __name__ == "__main__":
         ax.plot_surface(X1, X2, X3_true, label='True', alpha=0.5)
         ax.plot_surface(X1, X2, X3_pred, label='Predicted')
         ax.legend()
-        plt.show()
+        if wandb_run is not None:
+            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)})
+        else:
+            plt.show()
 
-    data = [[v1, v2] for v1, v2 in zip(metrics[list(metrics.keys())[-1]]['predicted_values'], metrics[list(metrics.keys())[-1]]['true_values'])]
-    loss_data = [[i+1, metrics[i]['train_dq_loss_scaled'], 'train_loss'] for i in range(len(metrics.keys()))]
-    loss_data.extend([[i+1, metrics[i]['val_dq_loss_scaled'], 'val_loss'] for i in range(len(metrics.keys()))])
-    table = wandb.Table(data=data, columns=["predicted_values", "true_values"])
-    table_loss = wandb.Table(data=loss_data, columns=['step', 'loss_scaled', 'series'])
-    run.log({'Prediction_plot': wandb.plot.scatter(table, "predicted_values", "true_values")})
-    run.log({'Loss_plot': wandb.plot.line(table_loss, "step", "loss_scaled", "series")})
+
+if __name__ == "__main__":
+    # unit test for value function estimator - fully substitute value function - 2 intervals
+
+    # run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu')
+
+    horizon = 2
+    nprices = 100
+
+    def objective(trial):
+
+        for key in mvnn_params.keys():
+            if key in mvnn_params_hpopt.keys():
+                mvnn_params[key] = eval('trial.suggest_' + mvnn_params_hpopt[key][0])(key, **mvnn_params_hpopt[key][1])
+                
+        
+        # bidder = LogarithmicBidder('bidder2_1')
+        bidders = [Prosumer('a', horizon=horizon), Prosumer('b', horizon=horizon), Prosumer('c', horizon=horizon)]
+        estimators = [ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params, mip_params, price_scale=100) for bidder in bidders]
+        
+        price_list = [nprices * (np.random.rand(horizon)*2-1) for i in range(100)]
+
+
+        queried_bundles = []
+        true_values = []
+        val_loss = []
+        times = []
+        r2 = []
+        for bidder, estimator in zip(bidders, estimators):
+            queried_bundles.append([])
+            true_values.append([])
+            for i in range(len(price_list)):
+                bundle, value = bidder.bundle_query(price_list[i])
+                queried_bundles.append(bundle)
+                true_values.append(value)
+                estimator.add_data_point(price_list[i], bundle, value)
+
+                if i in list(np.arange(10, nprices, 20, dtype=int)):
+                    start = time.time()
+                    model, metrics = estimator.dq_train_mvnn()
+                    val_loss.append(metrics[list(metrics.keys())[-1]]['val_dq_loss_scaled'])
+                    r2.append(metrics[list(metrics.keys())[-1]]['r2_centered'])
+                    times.append(time.time() - start)
+
+        return np.mean(val_loss), np.mean(r2), np.mean(times)
+
+    study = optuna.create_study(directions=["minimize", "maximize", "minimize"], sampler=optuna.samplers.TPESampler(seed=0))
+    study.optimize(objective, timeout=1800)
+
+    trials = sorted(study.best_trials, key=lambda t: t.values[0])
+    [print(trial.params) for trial in trials]
+    [print(trial.values) for trial in trials]
+    # print("Accuracy: {}".format(trial.value))
+    # print("Best hyperparameters: {}".format(trial.params))
+
+
+    # data = [[v1, v2] for v1, v2 in zip(metrics[list(metrics.keys())[-1]]['predicted_values'], metrics[list(metrics.keys())[-1]]['true_values'])]
+    # loss_data = [[i+1, metrics[i]['train_dq_loss_scaled'], 'train_loss'] for i in range(len(metrics.keys()))]
+    # loss_data.extend([[i+1, metrics[i]['val_dq_loss_scaled'], 'val_loss'] for i in range(len(metrics.keys()))])
+    # table = wandb.Table(data=data, columns=["predicted_values", "true_values"])
+    # table_loss = wandb.Table(data=loss_data, columns=['step', 'loss_scaled', 'series'])
+    # run.log({'Prediction_plot': wandb.plot.scatter(table, "predicted_values", "true_values")})
+    # run.log({'Loss_plot': wandb.plot.line(table_loss, "step", "loss_scaled", "series")})
     # print(f'Model trained with metrics: {metrics[list(metrics.keys())[-1]]}')
