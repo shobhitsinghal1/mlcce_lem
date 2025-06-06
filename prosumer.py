@@ -225,7 +225,7 @@ class Prosumer(Bidder):
         self.value_model['model'].update()
         self.value_model['model'].optimize()
         
-        if self.value_model['model'].status != SolverStatus.ok:
+        if self.value_model['model'].status != 2:
             return np.nan
 
         return self.value_model['model'].ObjVal
