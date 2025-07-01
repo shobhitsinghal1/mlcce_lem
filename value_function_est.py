@@ -13,7 +13,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 # Own Libs
-from prosumer import Prosumer, LogarithmicBidder, Bidder
+from Bidder import *
 from utils import *
 from mvnns.mvnn_generic import MVNN_GENERIC
 from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX

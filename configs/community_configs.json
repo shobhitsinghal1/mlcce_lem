@@ -1,7 +1,12 @@
 {
+    "community2": {
+        "bidders": ["EV1", "EV2", "EV3"],
+        "price_max": 200,
+        "imbalance_tol_coef": 0.1,
+        "horizon": 12
+    },
     "community1": {
-        "bidders": ["b", "c"],
-        "price_init": [[100, 100], [50, 50], [200, 200], [0, 0], [-200, -200], [-100, -100], [-50, -50]],
+        "bidders": ["EV1", "EV2", "EV3"],
         "price_max": 200,
         "imbalance_tol_coef": 0.1,
         "horizon": 2

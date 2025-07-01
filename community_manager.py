@@ -1,7 +1,7 @@
 import numpy as np
 from utils import *
-from prosumer import Prosumer, LogarithmicBidder
-from mlcce import MLCCE
+from Bidder import *
+from Mechanisms import *
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -15,15 +15,20 @@ class CommunityManager:
         self.bidders = [eval(bidder_configs[b]['type'])(b, self.horizon) for b in self.community_config["bidders"]]
 
         capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
-        self.mlcce = MLCCE([np.array(self.community_config["price_init"][i]) for i in range(len(self.community_config['price_init']))],
-                           self.query_bundle, 
-                           len(self.bidders), 
+        self.mlcce = MLCCE(n_init_prices=10,
+                           n_products=self.horizon,
+                           query_func=self.query_bundle, 
+                           num_participants=len(self.bidders), 
                            price_max=self.community_config["price_max"], 
                            capacities=capacities, 
                            imbalance_tol_coef=self.community_config["imbalance_tol_coef"],
-                           bidders = self.bidders)
+                           logname=community+'_n'+str(self.horizon),
+                           bidders=self.bidders)
+        self.chp_fullinfo = CHP_fullinfo(self.bidders,
+                                         capacities=capacities)
 
         self.full_info_mip = None
+
 
     def query_bundle(self, price: np.ndarray) -> tuple:
         """
@@ -69,16 +74,18 @@ class CommunityManager:
         return clearing_price, dispatch_bundles
 
     
-    def clear_market(self, ):
-        clearing_price, dispatch_bundles = self.mlcce.run_mlcce()
+    def clear_market(self, mechanism: str = 'MLCCE'):
+        if mechanism == 'CHP':
+            clearing_price = self.chp_fullinfo.run()
+        elif mechanism == 'MLCCE':
+            clearing_price, _ = self.mlcce.run()
 
-        print(clearing_price)
+        return clearing_price
 
 if __name__ == "__main__":
-    community_manager = CommunityManager("community1")
-    price, bundles = community_manager.get_full_info_clearing()
-    print('Full info clearing price:', price)
-    print('Dispatch:')
-    [print(bundles[i]) for i in range(len(bundles))]
+    community_manager = CommunityManager("community2")
+    chp_clearing_price = community_manager.clear_market('CHP')
+    print(f'Convex hull clearing price: {np.round(chp_clearing_price, 2)}')
     
-    community_manager.clear_market()
+    mlcce_clearing_price = community_manager.clear_market('MLCCE')
+    print('MLCCE clearing price:', mlcce_clearing_price)
