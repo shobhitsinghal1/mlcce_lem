@@ -20,9 +20,9 @@ from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENER
 
 class ValueFunctionEstimateDQ():
     
-    def __init__(self, capacity_generic_goods: np.ndarray, mvnn_params: dict, mip_params: dict, price_scale: float):
+    def __init__(self, capacity_generic_goods: list[np.ndarray], mvnn_params: dict, mip_params: dict, price_scale: float = 200):
         self.trained_model = None # supposed to point to the last trained model
-        self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX(mip_params=mip_params, capacity_generic_goods=capacity_generic_goods)
+        self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX(mip_params=mip_params)
         
         self.mvnn_params = mvnn_params
         self.mip_params = mip_params
@@ -49,7 +49,7 @@ class ValueFunctionEstimateDQ():
             optimizer.zero_grad()
 
             #--------------------------------
-            # IMPORTANT: we need to transform the weights and the biases of the MVNN to be non-positive and non-negative, respectively.
+            # IMPORTANT: we need to transform the weights of the MVNN to be non-negative.
             model.transform_weights()
             #--------------------------------
 
@@ -62,7 +62,7 @@ class ValueFunctionEstimateDQ():
                 self.max_util_mvnn_model.update_prices_in_objective(price_vector.cpu().numpy())
                 try:
                     predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
-                    if np.any(np.abs(predicted_demand)-self.capacity_generic_goods>self.mip_params['FeasibilityTol']*10):
+                    if np.any(self.capacity_generic_goods[0] - predicted_demand >= self.mip_params['FeasibilityTol']*10) or np.any(predicted_demand - self.capacity_generic_goods[1] >= self.mip_params['FeasibilityTol']*10):
                         print(f'domain violated: {predicted_demand}')
                 except:
                     print('--- MIP is unbounded, skipping this sample! ---')
@@ -93,6 +93,7 @@ class ValueFunctionEstimateDQ():
             if use_gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
+            model.transform_weights()
 
         return loss.detach().numpy()[0]
 
@@ -107,38 +108,39 @@ class ValueFunctionEstimateDQ():
         price_vectors = []
         true_values = []
         with torch.no_grad():
-            for demand_vector, price_vector, true_value in val_loader:
-                demand_vector = demand_vector.to(device)
-                scaled_value_prediction = trained_model(demand_vector)
-                scaled_value_preds.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-                demand_vectors.extend(list(demand_vector.cpu().numpy()))
-                true_values.extend(list(true_value.numpy()))
-                price_vectors.extend(list(price_vector.cpu().numpy()))
+            if val_loader is not None:
+                for demand_vector, price_vector, true_value in val_loader:
+                    demand_vector = demand_vector.to(device)
+                    scaled_value_prediction = trained_model(demand_vector)
+                    scaled_value_preds.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
+                    demand_vectors.extend(list(demand_vector.cpu().numpy()))
+                    true_values.extend(list(true_value.numpy()))
+                    price_vectors.extend(list(price_vector.cpu().numpy()))
 
-        scaled_value_preds = np.array(scaled_value_preds)
-        true_values = np.array(true_values)
-        scaled_true_values = true_values/self.price_scale
+            scaled_value_preds = np.array(scaled_value_preds)
+            true_values = np.array(true_values)
+            scaled_true_values = true_values/self.price_scale
 
-        # inferred_values = np.array([np.dot(price_vector, demand_vector) for (price_vector, demand_vector) in zip(price_vectors, demand_vectors)])
+            # inferred_values = np.array([np.dot(price_vector, demand_vector) for (price_vector, demand_vector) in zip(price_vectors, demand_vectors)])
 
-        value_preds = scaled_value_preds * self.price_scale
+            value_preds = scaled_value_preds * self.price_scale
 
-        # common_scale = np.mean(true_values)
-        # common_scale_true_values = true_values / common_scale
-        # common_scale_value_preds = value_preds / common_scale
+            # common_scale = np.mean(true_values)
+            # common_scale_true_values = true_values / common_scale
+            # common_scale_value_preds = value_preds / common_scale
 
-        # 1. generalization performance measures (on the validation set, that is drawn using price vectors)
-        # --------------------------------------
-        # val_metrics['r2'] = sklearn.metrics.r2_score(y_true=true_values, y_pred= value_preds)  # This is R2 coefficient of determination
-        val_metrics['kendall_tau'] = scipy_stats.kendalltau(scaled_value_preds, scaled_true_values).correlation
-        # val_metrics['mae'] = sklearn.metrics.mean_absolute_error(value_preds, true_values)
-        # val_metrics['mae_scaled'] = sklearn.metrics.mean_absolute_error(common_scale_value_preds, common_scale_true_values)
-        val_metrics['r2_centered'] = sklearn.metrics.r2_score(y_true=true_values - np.mean(true_values), y_pred= value_preds - np.mean(value_preds))
-        # a centered R2, because constant shifts in model predictions should not really affect us  
+            # 1. generalization performance measures (on the validation set, that is drawn using price vectors)
+            # --------------------------------------
+            # val_metrics['r2'] = sklearn.metrics.r2_score(y_true=true_values, y_pred= value_preds)  # This is R2 coefficient of determination
+            val_metrics['kendall_tau'] = scipy_stats.kendalltau(scaled_value_preds, scaled_true_values).correlation
+            # val_metrics['mae'] = sklearn.metrics.mean_absolute_error(value_preds, true_values)
+            # val_metrics['mae_scaled'] = sklearn.metrics.mean_absolute_error(common_scale_value_preds, common_scale_true_values)
+            val_metrics['r2_centered'] = sklearn.metrics.r2_score(y_true=true_values - np.mean(true_values), y_pred= value_preds - np.mean(value_preds))
+            # a centered R2, because constant shifts in model predictions should not really affect us  
 
-        val_metrics['true_values'] = true_values  # also store all true /predicted values so that we can make true vs predicted plots
-        val_metrics['predicted_values'] = value_preds
-        # val_metrics['inferred_values'] = inferred_values
+            val_metrics['true_values'] = true_values  # also store all true /predicted values so that we can make true vs predicted plots
+            val_metrics['predicted_values'] = value_preds
+            # val_metrics['inferred_values'] = inferred_values
 
         # --------------------------------------
         
@@ -306,6 +308,11 @@ class ValueFunctionEstimateDQ():
         self.dataset_price.append(price)
         self.dataset_true_value.append(true_value)
         self.dataset_bundle.append(bundle)
+
+        values_lower_bound = [np.dot(self.dataset_bundle[i], self.dataset_price[i]) for i in range(len(self.dataset_bundle))]
+        # print(f'Max: {np.max(values_lower_bound)}')
+        # print(f'Mean: {np.mean(values_lower_bound)}')
+        self.price_scale = np.mean(np.abs(values_lower_bound)) + 1e-5
         return
 
 
@@ -365,11 +372,11 @@ class ValueFunctionEstimateDQ():
         # print(f'learning_rate: {learning_rate}')
         # print(f'clip_grad_norm: {clip_grad_norm}')
 
-        model = MVNN_GENERIC(input_dim=len(self.capacity_generic_goods),
+        model = MVNN_GENERIC(input_dim=len(self.capacity_generic_goods[0]),
                             num_hidden_layers=self.mvnn_params['num_hidden_layers'],
                             num_hidden_units=self.mvnn_params['num_hidden_units'],
                             layer_type=self.mvnn_params['layer_type'],
-                            target_max=self.mvnn_params['target_max'],
+                            # target_max=self.mvnn_params['target_max'],
                             lin_skip_connection = self.mvnn_params['lin_skip_connection'],
                             dropout_prob = self.mvnn_params['dropout_prob'],
                             init_method = self.mvnn_params['init_method'],
@@ -402,11 +409,6 @@ class ValueFunctionEstimateDQ():
 
         metrics = {}
 
-        # if wandb_tracking:
-        #     for loss_str in ['train_loss_dq_scaled', 'val_loss_dq_scaled', 'mean_regret_scaled', 
-        #                     'val_r2_scaled', 'val_KT_scaled', 'val_MAE_scaled']:
-        #         wandb.define_metric(f'Bidder_{bidder.id}_{loss_str}', step_metric="epochs")
-
         for epoch in range(epochs):
             train_loss_dq = self.__dq_train_mvnn_helper(model,
                                                         optimizer,
@@ -430,6 +432,9 @@ class ValueFunctionEstimateDQ():
 
             # if epoch>=2 and max(metrics[epoch-2]['train_dq_loss_scaled'], metrics[epoch-1]['train_dq_loss_scaled']) < metrics[epoch]['train_dq_loss_scaled']:  # an early stopping condition
             #     break
+
+            if train_loss_dq <= 1e-2:
+                break
 
             # # TODO: remove later since we have W&B
             # if (epoch+1) % print_frequency == 0:
@@ -462,12 +467,12 @@ class ValueFunctionEstimateDQ():
         return self.max_util_mvnn_model.get_max_util_bundle()
 
 
-    def plot_nn(self, bidder: Bidder, wandb_run = None):
-        assert len(self.capacity_generic_goods) == 2, "Plotting is only supported for 2D"
+    def plot_nn(self, bidder: Bidder, step, wandb_run = None):
+        assert len(self.capacity_generic_goods[0]) == 2, "Plotting is only supported for 2D"
 
         bounds = self.capacity_generic_goods
-        x1 = np.linspace(-bounds[0], bounds[0], 50)
-        x2 = np.linspace(-bounds[1], bounds[1], 50)
+        x1 = np.linspace(bounds[0][0], bounds[1][0], 50)
+        x2 = np.linspace(bounds[0][1], bounds[1][1], 50)
         x1, x2 = np.meshgrid(x1, x2)
         X1, X2 = x1.flatten(), x2.flatten()
         X3_pred = []
@@ -485,7 +490,8 @@ class ValueFunctionEstimateDQ():
         ax.plot_surface(X1, X2, X3_pred, label='Predicted')
         ax.legend()
         if wandb_run is not None:
-            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)})
+            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)}, step=step)
+            plt.close(fig)
         else:
             plt.show()
 
@@ -495,7 +501,7 @@ if __name__ == "__main__":
 
     # run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu')
 
-    horizon = 2
+    horizon = 6
     nprices = 100
 
     def objective(trial):
@@ -506,7 +512,7 @@ if __name__ == "__main__":
                 
         
         # bidder = LogarithmicBidder('bidder2_1')
-        bidders = [Prosumer('a', horizon=horizon), Prosumer('b', horizon=horizon), Prosumer('c', horizon=horizon)]
+        bidders = [ProsumerStorage('EV2', horizon=horizon), ProsumerStorage('HomeStorage1', horizon=horizon), ProsumerRenewable('Solar1', horizon=horizon)]
         estimators = [ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params, mip_params, price_scale=100) for bidder in bidders]
         
         price_list = [nprices * (np.random.rand(horizon)*2-1) for i in range(100)]
@@ -514,7 +520,7 @@ if __name__ == "__main__":
 
         queried_bundles = []
         true_values = []
-        val_loss = []
+        train_loss = []
         times = []
         r2 = []
         for bidder, estimator in zip(bidders, estimators):
@@ -529,13 +535,14 @@ if __name__ == "__main__":
                 if i in list(np.arange(10, nprices, 20, dtype=int)):
                     start = time.time()
                     model, metrics = estimator.dq_train_mvnn()
-                    val_loss.append(metrics[list(metrics.keys())[-1]]['val_dq_loss_scaled'])
-                    r2.append(metrics[list(metrics.keys())[-1]]['r2_centered'])
+                    train_loss.append(metrics[list(metrics.keys())[-1]]['train_dq_loss_scaled'])
+                    # r2.append(metrics[list(metrics.keys())[-1]]['r2_centered'])
                     times.append(time.time() - start)
 
-        return np.mean(val_loss), np.mean(r2), np.mean(times)
+        # return np.mean(val_loss), np.mean(r2), np.mean(times)
+        np.mean(train_loss), np.mean(times)
 
-    study = optuna.create_study(directions=["minimize", "maximize", "minimize"], sampler=optuna.samplers.TPESampler(seed=0))
+    study = optuna.create_study(directions=["minimize", "minimize"], sampler=optuna.samplers.TPESampler(seed=0))
     study.optimize(objective, timeout=1800)
 
     trials = sorted(study.best_trials, key=lambda t: t.values[0])
