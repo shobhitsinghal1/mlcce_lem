@@ -14,66 +14,31 @@ class CommunityManager:
         self.horizon = self.community_config["horizon"]
         self.bidders = [eval(bidder_configs[b]['type'])(b, self.horizon) for b in self.community_config["bidders"]]
 
-        capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
+        wandb_run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu', name=community+'_n'+str(self.horizon)) 
+
+        if type(self.community_config["price_max"]) is not list:
+            price_max = np.array([self.community_config["price_max"]]*self.horizon)
+        else:
+            price_max = self.community_config["price_max"]
+        if type(self.community_config["price_min"]) is not list:
+            price_min = np.array([self.community_config["price_min"]]*self.horizon)
+        else:
+            price_min = self.community_config["price_min"]
+        
+        
         self.mlcce = MLCCE(n_init_prices=10,
                            n_products=self.horizon,
-                           query_func=self.query_bundle, 
-                           num_participants=len(self.bidders), 
-                           price_max=self.community_config["price_max"], 
-                           capacities=capacities, 
+                           price_bound=(price_min, price_max),
                            imbalance_tol_coef=self.community_config["imbalance_tol_coef"],
-                           logname=community+'_n'+str(self.horizon),
+                           wandb_run=wandb_run,
                            bidders=self.bidders)
         self.chp_fullinfo = CHP_fullinfo(self.bidders,
-                                         capacities=capacities)
+                                         price_bound=(price_min, price_max),
+                                         wandb_run=wandb_run)
 
         self.full_info_mip = None
 
 
-    def query_bundle(self, price: np.ndarray) -> tuple:
-        """
-        Query the utility maximizing bundle from prosumers at the given price
-        """
-        bundles = []
-        values = []
-        for prosumer in self.bidders:
-            bundle, value = prosumer.bundle_query(price)
-            bundles.append(bundle)
-            values.append(value)
-        return bundles, values
-
-    
-    def get_full_info_clearing(self, ) -> tuple:
-        self.full_info_mip = gp.Model("Full information clearing MIP")
-        objexpr = 0
-        dispatch_variables = []
-        for b in self.bidders:
-            x, obj = b.add_model(self.full_info_mip)
-            dispatch_variables.append(x)
-            objexpr += obj
-        self.full_info_mip.setObjective(objexpr, GRB.MAXIMIZE)
-        balance_constrs = [self.full_info_mip.addConstr(gp.quicksum(dispatch_variables[j][i] for j in range(len(self.bidders)))==0, name=f"balance_{i}") for i in range(self.horizon)] # couple all bidders by balance constraint
-        self.full_info_mip.update()
-        self.full_info_mip.optimize()
-
-        if self.full_info_mip.status != 2:
-            self.full_info_mip.computeIIS()
-            self.full_info_mip.write("full_info_clearing.ilp")
-            raise ValueError(f"The problem is not feasible, status: {gurobi_status_converter(self.full_info_mip.status)}")
-
-        dispatch_bundles = [np.array([dispatch_variables[j][i].getAttr('x') for i in range(self.horizon)]) for j in range(len(self.bidders))]
-        
-        if self.full_info_mip.IsMIP:
-            fixedmodel = self.full_info_mip.fixed()        
-            fixedmodel.optimize()
-            clearing_price = np.array([fixedmodel.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
-        else:
-            clearing_price = np.array([self.full_info_mip.getConstrByName(f'balance_{i}').Pi for i in range(self.horizon)])
-
-
-        return clearing_price, dispatch_bundles
-
-    
     def clear_market(self, mechanism: str = 'MLCCE'):
         if mechanism == 'CHP':
             clearing_price = self.chp_fullinfo.run()
@@ -84,8 +49,7 @@ class CommunityManager:
 
 if __name__ == "__main__":
     community_manager = CommunityManager("community2")
-    chp_clearing_price = community_manager.clear_market('CHP')
-    print(f'Convex hull clearing price: {np.round(chp_clearing_price, 2)}')
-    
+    chp_clearing_price, dispatch = community_manager.clear_market('CHP')
+
     mlcce_clearing_price = community_manager.clear_market('MLCCE')
     print('MLCCE clearing price:', mlcce_clearing_price)
