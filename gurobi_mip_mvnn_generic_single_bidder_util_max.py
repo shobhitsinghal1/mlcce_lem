@@ -13,7 +13,7 @@ from utils import gurobi_status_converter
 class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
-    def __init__(self, mip_params, capacity_generic_goods):
+    def __init__(self, mip_params):
         
         # MVNN PARAMETERS
         self.trained_model = None  # MVNN TORCH MODEL
@@ -43,9 +43,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
         self.gpenv = gp.Env(params={'LogToConsole': 0 if not self.solve_verbose else 1,
                                     'OutputFlag': 0 if not self.solve_verbose else 1})
-        
-        self.capacity_generic_goods = capacity_generic_goods
-
 
     def __calc_preactivated_box_bounds(self,
                                      verbose = False):
@@ -53,9 +50,10 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # BOX-bounds for y variable (preactivated!!!!) as column vectors
 
         # Initialize
-        input_upper_bounds = np.array(self.trained_model.capacity_generic_goods).reshape(-1, 1)
+        input_upper_bounds = self.trained_model.capacity_generic_goods[1].reshape(-1, 1)
+        input_lower_bounds = self.trained_model.capacity_generic_goods[0].reshape(-1, 1)
         self.upper_box_bounds = [input_upper_bounds]
-        self.lower_box_bounds = [-input_upper_bounds] #C: lb
+        self.lower_box_bounds = [input_lower_bounds]
 
         
         # Propagate through Network 
@@ -64,10 +62,10 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             # -------------------
             if i == 0:
                 W = layer.weight.data.cpu().detach().numpy()
-                # Remark: no bias b
+                b = layer.bias.data.cpu().detach().numpy().reshape(-1, 1)
                 # Remark: no vector t since we calculate pre-activate bounds for first hidden layer (generic trafo)
-                self.upper_box_bounds.append(W @ self.upper_box_bounds[-1])
-                self.lower_box_bounds.append(W @ self.lower_box_bounds[-1])
+                self.upper_box_bounds.append(W @ self.upper_box_bounds[-1] + b)
+                self.lower_box_bounds.append(W @ self.lower_box_bounds[-1] + b)
 
             elif i == 1:
                 W = layer.weight.data.cpu().detach().numpy()
@@ -92,6 +90,8 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         if verbose:
             print('Lower Box Bounds:')
             print(self.lower_box_bounds)
+
+        assert np.all([np.all(self.upper_box_bounds[i]>=self.lower_box_bounds[i]) for i in range(len(self.upper_box_bounds))])
         return
 
 
@@ -153,7 +153,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             if i == 0:
                 # NEW: first hidden layer after generic transformation
                 for (j, weight) in enumerate(layer.weight.data):
-                    self.y_variables[i+1][j] = gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) # no bias in generic transformation
+                    self.y_variables[i+1][j] = gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) + layer.bias.data[j] # no bias in generic transformation
             else:
                 for (j, weight) in enumerate(layer.weight.data):
                     # CASE 1 -> REMOVAL:
@@ -214,8 +214,9 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # Final output layer of MVNN
         # Linear Constraints for the output layer WITH lin_skip_layer: W*y
         if hasattr(self.trained_model, 'lin_skip_layer'):
-            lin_skip_W = self.trained_model.lin_skip_layer.weight.detach().cpu().numpy() 
-            self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias + gp.quicksum(lin_skip_W[0, i]*self.y_variables[0][i] for i in range(lin_skip_W.shape[1])) == self.y_variables[-1][0], name='output_layer')
+            lin_skip_W = self.trained_model.lin_skip_layer.weight.detach().cpu().numpy()
+            lin_skip_bias = self.trained_model.lin_skip_layer.bias.data
+            self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias + gp.quicksum(lin_skip_W[0, i]*self.y_variables[0][i] for i in range(lin_skip_W.shape[1])) + lin_skip_bias == self.y_variables[-1][0], name='output_layer')
         # Linear Constraints for the output layer WIHTOUT lin_skip_layer: W*y + W_0*x
         else:
             self.mip.addConstr(gp.quicksum(output_weight[k] * self.y_variables[-2][k] for k in range(len(output_weight))) + output_bias == self.y_variables[-1][0], name='output_layer')
@@ -304,8 +305,8 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
             for i in range(len(self.y_variables[0])):
                 self.optimal_schedule.append(self.y_variables[0][i].x)
         except:
-            self.mip.write('mip_mvnn_generic_single_bidder_ilp.ilp')
             self.__print_info()
+            self.mip.write('mip_mvnn_generic_single_bidder_ilp.ilp')
             raise ValueError('MIP did not solve succesfully!')
 
         if self.solve_verbose:

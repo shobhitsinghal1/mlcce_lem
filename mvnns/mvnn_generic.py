@@ -13,7 +13,7 @@ class MVNN_GENERIC(nn.Module):
                  num_hidden_units: int,
                  dropout_prob: float,
                  layer_type: str,
-                 target_max: float,
+                #  target_max: float,
                  init_method: str,
                  random_ts: tuple,
                  trainable_ts: bool,
@@ -23,7 +23,7 @@ class MVNN_GENERIC(nn.Module):
                  init_bias: float,
                  init_little_const: float,
                  lin_skip_connection: bool,
-                 capacity_generic_goods: np.array,
+                 capacity_generic_goods: list[np.ndarray],
                  *args, **kwargs):
 
         super(MVNN_GENERIC, self).__init__()
@@ -33,7 +33,7 @@ class MVNN_GENERIC(nn.Module):
         self.output_activation_function = torch.nn.Identity()
         self._layer_type = layer_type
         self._num_hidden_layers = num_hidden_layers
-        self._target_max = target_max
+        # self._target_max = target_max
         self.capacity_generic_goods = capacity_generic_goods
 
         self.layers = []
@@ -42,10 +42,13 @@ class MVNN_GENERIC(nn.Module):
         #------------------------
         generic_trafo_layer = nn.Linear(in_features = input_dim,
                                         out_features = input_dim,
-                                        bias = False)
-        generic_trafo_layer_weight = np.diag(1/(self.capacity_generic_goods+1e-5)) # small constant for numerical sanity
+                                        bias = True)
+        generic_trafo_layer_weight = np.diag(2/(self.capacity_generic_goods[1] - self.capacity_generic_goods[0] + 1e-5)) # small constant for numerical sanity
         generic_trafo_layer_weight = generic_trafo_layer_weight.astype(np.float32)
+        generic_trafo_layer_bias = (-self.capacity_generic_goods[0] -self.capacity_generic_goods[1]) / (self.capacity_generic_goods[1] - self.capacity_generic_goods[0] + 1e-5)
+        generic_trafo_layer_bias = generic_trafo_layer_bias.astype(np.float32)
         generic_trafo_layer.weight.data = torch.from_numpy(generic_trafo_layer_weight)
+        generic_trafo_layer.bias.data = torch.from_numpy(generic_trafo_layer_bias)
         for param in generic_trafo_layer.parameters():
             param.requires_grad = False
 
@@ -107,7 +110,7 @@ class MVNN_GENERIC(nn.Module):
                                            init_method='zero',
                                            random_ts=None,
                                            trainable_ts=False,
-                                           bias=False,
+                                           bias=True,
                                            use_brelu=False,
                                            init_E=None,
                                            init_Var=None,
