@@ -1,9 +1,10 @@
 {
     "community2": {
-        "bidders": ["EV1", "EV2", "EV3"],
-        "price_max": 200,
-        "imbalance_tol_coef": 0.1,
-        "horizon": 12
+        "bidders": ["EV2", "HomeStorage1", "HeatPump1", "Solar1", "Wind1"],
+        "price_max": 80,
+        "price_min": 30,
+        "imbalance_tol_coef": 0.01,
+        "horizon": 2
     },
     "community1": {
         "bidders": ["EV1", "EV2", "EV3"],
@@ -12,11 +13,11 @@
         "horizon": 2
     },
     "dummy_logarithmic_community": {
-        "bidders": ["bidder1", "bidder1", "bidder1", "bidder1", "bidder1"],
-        "price_init": [[100, 100, 100, 100], [50, 50, 50, 50], [200, 200, 200, 200], [0, 0, 0, 0], [-200, -200, -200, -200], [-100, -100, -100, -100], [-50, -50, -50, -50]],
-        "price_max": 1000,
-        "imbalance_tol_coef": 0.01,
-        "horizon": 4
+        "bidders": ["bidder1", "bidder2", "bidder3", "bidder4", "bidder5"],
+        "price_max": 20,
+        "price_min": -20,
+        "imbalance_tol_coef": 0.001,
+        "horizon": 2
     },
     "dummy_logarithmic_community_1": {
         "bidders": ["bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1"],
