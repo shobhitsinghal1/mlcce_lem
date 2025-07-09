@@ -12,12 +12,18 @@ mip_params = {
 
 next_price_params = {
     'method': 'trust-constr',
-    'prox_coef': 10,
+    'prox_coef': 5,
     # 'trust_region_radius_coef': 1,
     # 'trust_region_decay_pow': -0.7,
     # 'base_learning_rate': 1,
     # 'lr_decay': 0.02,
     # 'max_iter': 1000,
+}
+
+cce_params = {
+    'imb_tol_coef': 0.05,
+    'max_iter': 100,
+    'lr': 0.1,
 }
 
 #   prosumer

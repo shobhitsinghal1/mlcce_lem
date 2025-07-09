@@ -317,10 +317,11 @@ class Prosumer(Bidder):
         self.dq_model['model'].update()
         self.dq_model['model'].optimize()
 
-        if self.dq_model['model'].status != 2:
+        try:
+            bundle = np.array([self.dq_model['p'][h].x for h in self.dq_model['H']])
+        except:
             raise ValueError(f"The prosumer greedy bundle model is {gurobi_status_converter(self.dq_model['model'].status)}.")
         
-        bundle = np.array([self.dq_model['p'][h].x for h in self.dq_model['H']])
         return bundle, self.dq_model['model'].ObjVal + np.dot(price, bundle)
 
 
@@ -364,9 +365,6 @@ class ProsumerRenewable(Prosumer):
 
         #sets
         m['H'] = list(range(nH))
-        m['Hs'] = list(range(-1, nH)) # for storage SoC
-
-        m['M'] = 1000 # Is there a better way to do this - like the one in mvnn mip?
 
         # preference parameters
         m['oppdprice'] = self.get_param_values('oppdprice') # (h)
@@ -390,6 +388,37 @@ class ProsumerRenewable(Prosumer):
         return gp.quicksum(m['oppdprice'][h] * m['p'][h] for h in m['H'])
 
 
+class ProsumerConsumer(Prosumer):
+
+    def add_asset_params_vars(self, m: dict):
+        
+        nH = self.horizon
+
+        #sets
+        m['H'] = list(range(nH))
+
+        # preference parameters
+        m['oppcprice'] = self.get_param_values('oppcprice') # (h)
+        m['consumption'] = self.get_param_values('consumption')
+
+        # variables
+        m['p'] = m['model'].addVars(m['H'], name=f'p_{self.name}', lb=float('-inf'))
+
+        return
+    
+
+    def add_asset_constraints(self, m: dict):
+
+        m['model'].addConstrs((m['p'][h] >= 0 for h in m['H']), name=f'cons10u_{self.name}')
+        m['model'].addConstrs((m['p'][h] <= m['consumption'][h] for h in m['H']), name=f'cons10l_{self.name}')
+
+        return
+
+
+    def get_value_obj_expr(self, m: dict):
+        return gp.quicksum(m['oppcprice'][h] * m['p'][h] for h in m['H'])
+
+
 class ProsumerStorage(Prosumer):
 
     def add_asset_constraints(self, m: dict):
@@ -403,7 +432,9 @@ class ProsumerStorage(Prosumer):
         
         m['model'].addConstrs((m['s'][h] <= m['su'][h] for h in m['H']), name=f'cons5_{self.name}')
         m['model'].addConstrs((m['s'][h] >= m['sl'][h] for h in m['H']), name=f'cons6_{self.name}')
-        m['model'].addConstr((m['s'][-1] == m['s0']), name=f'cons7_{self.name}')
+        m['model'].addConstr((m['s'][-1] == m['s0']), name=f'cons7a_{self.name}')
+        # if m['sn'] >=0:
+        #     m['model'].addConstr((m['s'][m['H'][-1]] == m['sn']), name=f'cons7b_{self.name}')
 
         m['model'].addConstrs((m['P'][h] >= m['p'][h] for h in m['H']), name=f'cons8_{self.name}')
         m['model'].addConstrs((m['P'][h] >= -m['p'][h] for h in m['H']), name=f'cons9_{self.name}')
@@ -417,7 +448,10 @@ class ProsumerStorage(Prosumer):
 
 
     def get_value_obj_expr(self, m: dict):
-        return gp.quicksum( - m['P'][h]*m['beta'][h] + m['oppcprice'][h] * m['p'][h] * m['delta'][h] + m['oppdprice'][h] * m['p'][h] * (1 - m['delta'][h]) for h in m['H'])
+        if m['sn'] >= 0:
+            return gp.quicksum( - m['P'][h]*m['beta'][h] + m['oppcprice'][h] * m['p'][h] * m['delta'][h] + m['oppdprice'][h] * m['p'][h] * (1 - m['delta'][h]) - (m['s'][h] - m['sn']) * (m['s'][h] - m['sn']) * m['alpha'] for h in m['H'])
+        else:
+            return gp.quicksum( - m['P'][h]*m['beta'][h] + m['oppcprice'][h] * m['p'][h] * m['delta'][h] + m['oppdprice'][h] * m['p'][h] * (1 - m['delta'][h]) for h in m['H'])
 
 
     def add_asset_params_vars(self, m: dict):
@@ -437,6 +471,8 @@ class ProsumerStorage(Prosumer):
         m['su'] = self.get_param_values('su') # (h) SoC upper limit
         m['sl'] = self.get_param_values('sl') # (h) SoC lower limit
         m['s0'] = self.get_param_values('s0') # () initial SoC
+        m['sn'] = self.get_param_values('sn') # () terminal SoC
+        m['alpha'] = self.get_param_values('alpha')
         m['eta'] = self.get_param_values('eta') # () charging efficiency
         m['gamma'] = self.get_param_values('gamma') # (h) dissipation rate
         m['beta'] = self.get_param_values('beta') # (h) storage degradation coeff

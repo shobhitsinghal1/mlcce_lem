@@ -35,21 +35,29 @@ class CommunityManager:
         self.chp_fullinfo = CHP_fullinfo(self.bidders,
                                          price_bound=(price_min, price_max),
                                          wandb_run=wandb_run)
+        self.cce = CCE(self.bidders,
+                       price_bound=(price_min, price_max),
+                       wandb_run=wandb_run)
 
         self.full_info_mip = None
 
 
     def clear_market(self, mechanism: str = 'MLCCE'):
         if mechanism == 'CHP':
-            clearing_price = self.chp_fullinfo.run()
+            clearing_price, dispatch = self.chp_fullinfo.run()
         elif mechanism == 'MLCCE':
-            clearing_price, _ = self.mlcce.run()
+            clearing_price, dispatch = self.mlcce.run()
+        elif mechanism == 'CCE':
+            clearing_price, dispatch = self.cce.run()
 
-        return clearing_price
+        return clearing_price, dispatch
 
 if __name__ == "__main__":
     community_manager = CommunityManager("community2")
-    chp_clearing_price, dispatch = community_manager.clear_market('CHP')
+    chp_clearing_price, chp_dispatch = community_manager.clear_market('CHP')
 
-    mlcce_clearing_price = community_manager.clear_market('MLCCE')
+    cce_clearing_price, cce_dispatch = community_manager.clear_market('CCE')
+
+    mlcce_clearing_price, mlcce_dispatch = community_manager.clear_market('MLCCE')
     print('MLCCE clearing price:', mlcce_clearing_price)
+    

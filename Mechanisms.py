@@ -9,7 +9,7 @@ import concurrent.futures
 
 #own libs
 from value_function_est import ValueFunctionEstimateDQ
-from utils import mvnn_params, mip_params, next_price_params
+from utils import mvnn_params, mip_params, next_price_params, cce_params
 
 
 class MLCCE:
@@ -39,6 +39,7 @@ class MLCCE:
         self.mlcce_iter = 0
 
         self.next_price_params = next_price_params
+        self.cce_params = cce_params
 
         self.train_timer = Timer('train_timer', logger=None)
         self.next_price_timer = Timer('next_price_timer', logger=None)
@@ -66,11 +67,11 @@ class MLCCE:
 
         initial_price = self.price_iterates[-1]
         # trust_region_rad = [self.next_price_params['trust_region_radius_coef'] * (self.price_bound[1][i]-self.price_bound[0][i]) * np.pow(self.mlcce_iter+1, self.next_price_params['trust_region_decay_pow']) for i in range(self.n_products)]
-        # bounds=[(initial_price[i] - trust_region_rad[i], initial_price[i] + trust_region_rad[i]) for i in range(self.n_products)]
+        bounds=[(self.price_bound[0][i], self.price_bound[1][i]) for i in range(self.n_products)]
         solution = opt.minimize(self.__next_price_objective,
                                 initial_price,
                                 jac=self.__next_price_grad,
-                                # bounds=bounds,
+                                bounds=bounds,
                                 constraints=[opt.LinearConstraint(np.diag(self.current_imb), lb=self.current_imb*initial_price)],
                                 method=self.next_price_params['method'])
 
@@ -164,7 +165,7 @@ class MLCCE:
         """
 
         # initial queries
-        self.price_iterates = [np.zeros(self.n_products)] # start with zero price
+        self.price_iterates = [(self.price_bound[0] + self.price_bound[1])/2]
 
         for i in range(1, self.n_init_prices):
             self.queried_bundles.append([])
@@ -177,7 +178,7 @@ class MLCCE:
                 self.true_lagrangian[-1] += true_value - np.dot(self.price_iterates[i-1], bundle)
                 self.value_estimators[j].add_data_point(self.price_iterates[i-1], bundle, true_value)
             
-            self.price_iterates.append(self.price_iterates[i-1] + np.sum(self.queried_bundles[-1], 0))
+            self.price_iterates.append(self.price_iterates[i-1] + np.sum(self.queried_bundles[-1], 0) * self.cce_params['lr'])
         
         while True:
             # Query the utility maximizing bundle from prosumers at the current price
@@ -233,6 +234,78 @@ class MLCCE:
         return self.price_iterates[-1], self.queried_bundles[-1]
 
 
+class CCE:
+    def __init__(self, bidders: list, price_bound: tuple, wandb_run):
+        self.bidders = bidders
+        self.capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
+        self.n_products = len(self.capacities[0][0])
+        self.price_bound = price_bound
+        self.wandb_run = wandb_run
+        self.cce_params = cce_params
+
+        self.price_iterates = [(self.price_bound[0] + self.price_bound[1])/2]  # start with zero price
+        self.queried_bundles = []
+        self.true_lagrangian = []
+    
+
+    def run(self, ):
+        
+        while True:
+            self.queried_bundles.append([])
+            self.true_lagrangian.append(0)
+
+            gradient = np.zeros(self.n_products)
+            for i, bidder in enumerate(self.bidders):
+                bundle, true_value = bidder.bundle_query(self.price_iterates[-1])
+                self.queried_bundles[-1].append(bundle)
+                self.true_lagrangian[-1] += true_value - np.dot(self.price_iterates[-1], bundle)
+                gradient -= bundle
+            
+            self.price_iterates.append(self.price_iterates[-1] - self.cce_params['lr'] * gradient)
+
+            if self.cce_params['imb_tol_coef'] * np.linalg.norm(np.sum(self.capacities[1], 0) - np.sum(self.capacities[0], 0), 2) >= np.linalg.norm(gradient, 2) or len(self.price_iterates) >= self.cce_params['max_iter']:
+                break
+        
+        dispatch = self.queried_bundles[-1]
+        print(f'CCE imbalance: {np.round(-gradient, 2)}')
+        print(f'CCE clearing price: {np.round(self.price_iterates[-1], 2)}')
+        print(f'CCE Lagrangian: {self.true_lagrangian[-1]:.2f}')
+
+        fig, ax = plt.subplots()
+        [ax.plot(np.arange(1, self.n_products+1, 1), dispatch[i], label=f'{self.bidders[i].get_name()}') for i in range(len(dispatch))]
+        ax.legend()
+
+        data_price_iterates = [[j+1]+[self.price_iterates[j][i] for i in range(self.n_products)] for j in range(len(self.price_iterates))]
+        data_imbalance = [[j+1]+list(np.sum(self.queried_bundles[j], 0)) for j in range(len(self.queried_bundles))]
+        data_true_lagrangian = [[i+1, self.true_lagrangian[i]] for i in range(len(self.true_lagrangian))]
+        table_price_iterates = pd.DataFrame(data_price_iterates, columns=['iter']+[f'Product {i}' for i in range(self.n_products)])
+        table_imbalance = pd.DataFrame(data_imbalance, columns=['iter']+[f'Product {i}' for i in range(self.n_products)])
+        table_true_lagrangian = pd.DataFrame(data=data_true_lagrangian, columns=['iter', 'true_lagrangian'])
+
+        if self.wandb_run is not None:
+            self.wandb_run.log({f"CCE_dispatch": wandb.Image(fig)})
+            plt.close(fig)
+            self.wandb_run.log({"CCE_price_iterates_plot": wandb.plot.line_series(xs=table_price_iterates['iter'],
+                                                                                  ys=[table_price_iterates[f'Product {i}'] for i in range(self.n_products)],
+                                                                                  keys=[f'Product {i}' for i in range(self.n_products)],
+                                                                                  title="CCE Price Iterates",
+                                                                                  xname="CCE Iteration"
+                                                                                  )}, commit=False)
+            self.wandb_run.log({"CCE_imbalance_plot": wandb.plot.line_series(xs=table_imbalance['iter'],
+                                                                             ys=[table_imbalance[f'Product {i}'] for i in range(self.n_products)],
+                                                                             keys=[f'Product {i}' for i in range(self.n_products)],
+                                                                             title="CCE Imbalance",
+                                                                             xname="CCE Iteration"
+                                                                             )}, commit=False)
+            self.wandb_run.log({"CCE_true_lagrangian": wandb.plot.line_series(xs=table_true_lagrangian['iter'],
+                                                                                ys=[table_true_lagrangian['true_lagrangian']],
+                                                                                title="True lagrangian",
+                                                                                xname="CCE Iteration"
+                                                                                )})
+        
+        return self.price_iterates[-1], dispatch
+
+
 class CHP_fullinfo:
     def __init__(self, bidders: list, price_bound: tuple, wandb_run):
         self.bidders = bidders
@@ -268,9 +341,9 @@ class CHP_fullinfo:
         solution = opt.minimize(objective, initial_price, jac=gradient, bounds=bounds)
 
         imb = -gradient(solution.x)
-        print(f'CHP imbalance: {imb}')
+        print(f'CHP imbalance: {np.round(imb, 2)}')
         print(f'CHP clearing price: {np.round(solution.x, 2)}')
-        print(f'CHP Lagrangian: {objective(solution.x)}')
+        print(f'CHP Lagrangian: {objective(solution.x):.2f}')
 
         dispatch = [bidder.bundle_query(solution.x)[0] for bidder in self.bidders]
 

@@ -1,10 +1,10 @@
 {
     "community2": {
-        "bidders": ["EV2", "HomeStorage1", "HeatPump1", "Solar1", "Wind1"],
+        "bidders": ["EV2", "HomeStorage1", "HeatPump1", "Solar1", "Consumer1"],
         "price_max": 80,
-        "price_min": 30,
+        "price_min": 0,
         "imbalance_tol_coef": 0.01,
-        "horizon": 2
+        "horizon": 6
     },
     "community1": {
         "bidders": ["EV1", "EV2", "EV3"],
