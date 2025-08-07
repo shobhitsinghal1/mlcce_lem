@@ -11,19 +11,19 @@ mip_params = {
 }
 
 next_price_params = {
-    'method': 'trust-constr',
-    'prox_coef': 5,
-    # 'trust_region_radius_coef': 1,
-    # 'trust_region_decay_pow': -0.7,
-    # 'base_learning_rate': 1,
-    # 'lr_decay': 0.02,
-    # 'max_iter': 1000,
+    'method': 'SLSQP',
+    'prox_coef': 0,
 }
 
 cce_params = {
-    'imb_tol_coef': 0.05,
-    'max_iter': 100,
-    'lr': 0.1,
+    'max_iter': 40,
+    'base_step': 0.1,
+    'decay': 0.6,
+}
+
+mlcce_params = {
+    'cce_rounds': 5,
+    'max_iter': 40
 }
 
 #   prosumer
@@ -56,10 +56,10 @@ mvnn_params_n2 = {
 mvnn_params = {
     'clip_grad_norm': 1,
     'use_gradient_clipping': False,
-    'train_split': 1,
+    'train_split': 0.7,
     'batch_size': 1000,
     'epochs': 200,
-    'l2_reg': .02,
+    'l2_reg': .1,
     'learning_rate': 0.06,
     'print_frequency': 101,
 
@@ -119,8 +119,8 @@ mvnn_params_hpopt = {
     # 'trainable_ts': ['categorical', {'choices': [True, False]}],
 }
 
-bidder_configs = json.load(open('configs/bidder_configs.json'))
-asset_configs = json.load(open('configs/asset_configs.json'))
+static_bidder_configs = json.load(open('configs/bidder_configs_static.json'))
+# asset_configs = json.load(open('configs/asset_configs.json'))
 community_configs = json.load(open('configs/community_configs.json'))
 
 def gurobi_status_converter(int_status):

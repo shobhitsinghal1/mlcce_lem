@@ -274,7 +274,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
     def update_model(self, model):
-        self.trained_model = model
+        self.trained_model = model # accesses box bounds for trained network
         self.ts = [layer.ts.data.cpu().detach().numpy().reshape(-1, 1) for layer in model.layers if layer._get_name() not in ['Linear']]
         self.__generate_mip()
         return

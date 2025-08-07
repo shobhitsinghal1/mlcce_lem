@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from torchinfo import summary
 import torch.nn as nn
 from mvnns.layers import *
 
@@ -13,7 +12,6 @@ class MVNN_GENERIC(nn.Module):
                  num_hidden_units: int,
                  dropout_prob: float,
                  layer_type: str,
-                #  target_max: float,
                  init_method: str,
                  random_ts: tuple,
                  trainable_ts: bool,

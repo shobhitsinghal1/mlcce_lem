@@ -18,21 +18,24 @@ from utils import *
 from mvnns.mvnn_generic import MVNN_GENERIC
 from gurobi_mip_mvnn_generic_single_bidder_util_max import GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX
 
+PYTHONWARNINGS = 'error'
+
 class ValueFunctionEstimateDQ():
     
     def __init__(self, capacity_generic_goods: list[np.ndarray], mvnn_params: dict, mip_params: dict, price_scale: float = 200):
         self.trained_model = None # supposed to point to the last trained model
         self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX(mip_params=mip_params)
+        self.price_scale = price_scale
         
+        # Params
         self.mvnn_params = mvnn_params
         self.mip_params = mip_params
         self.capacity_generic_goods = capacity_generic_goods
         
+        # Maintains a dataset
         self.dataset_price = []
         self.dataset_true_value = []
         self.dataset_bundle = []
-
-        self.price_scale = price_scale
 
 
     @profile
@@ -44,7 +47,7 @@ class ValueFunctionEstimateDQ():
         model.train()
         # loss_dq_list = []
 
-        for batch_idx, (demand_vectors, price_vectors) in enumerate(train_loader_demand_queries):
+        for batch_idx, (demand_vectors, price_vectors, _) in enumerate(train_loader_demand_queries):
             price_vectors, demand_vectors = price_vectors.to(device), demand_vectors.to(device)
             optimizer.zero_grad()
 
@@ -98,169 +101,99 @@ class ValueFunctionEstimateDQ():
         return loss.detach().numpy()[0]
 
 
-    def __dq_val_mvnn(self, trained_model, val_loader, device):
-        
+    def __dq_val_mvnn(self, trained_model, val_loader, train_loader, device):
         trained_model.eval()
-        val_metrics = {}
+        metrics = {}
 
-        scaled_value_preds = []
-        demand_vectors = []
-        price_vectors = []
-        true_values = []
+        # Validation data
+        scaled_value_preds_val = []
+        demand_vectors_val = []
+        price_vectors_val = []
+        true_values_val = []
         with torch.no_grad():
             if val_loader is not None:
                 for demand_vector, price_vector, true_value in val_loader:
                     demand_vector = demand_vector.to(device)
                     scaled_value_prediction = trained_model(demand_vector)
-                    scaled_value_preds.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-                    demand_vectors.extend(list(demand_vector.cpu().numpy()))
-                    true_values.extend(list(true_value.numpy()))
-                    price_vectors.extend(list(price_vector.cpu().numpy()))
+                    scaled_value_preds_val.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
+                    true_values_val.extend(list(true_value.numpy()))
+                    demand_vectors_val.extend(list(demand_vector.cpu().numpy()))
+                    price_vectors_val.extend(list(price_vector.numpy()))
+        
+                scaled_value_preds_val = np.array(scaled_value_preds_val)
+                value_preds_val = scaled_value_preds_val * self.price_scale
+                true_values_val = np.array(true_values_val)
+                scaled_true_values_val = true_values_val/self.price_scale
 
-            scaled_value_preds = np.array(scaled_value_preds)
-            true_values = np.array(true_values)
-            scaled_true_values = true_values/self.price_scale
 
-            # inferred_values = np.array([np.dot(price_vector, demand_vector) for (price_vector, demand_vector) in zip(price_vectors, demand_vectors)])
+        # Train data
+        scaled_value_preds_train = []
+        demand_vectors_train = []
+        price_vectors_train = []
+        true_values_train = []
+        with torch.no_grad():
+            for demand_vector, price_vector, true_value in train_loader:
+                demand_vector = demand_vector.to(device)
+                scaled_value_prediction = trained_model(demand_vector)
+                scaled_value_preds_train.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
+                true_values_train.extend(list(true_value.numpy()))
+                demand_vectors_train.extend(demand_vector.cpu().numpy())
+                price_vectors_train.extend(price_vector.numpy())
+            
+            scaled_value_preds_train = np.array(scaled_value_preds_train)
+            value_preds_train = scaled_value_preds_train * self.price_scale
+            true_values_train = np.array(true_values_train)
+            scaled_true_values_train = true_values_train/self.price_scale
 
-            value_preds = scaled_value_preds * self.price_scale
+        # --------------------------------------
 
-            # common_scale = np.mean(true_values)
-            # common_scale_true_values = true_values / common_scale
-            # common_scale_value_preds = value_preds / common_scale
-
-            # 1. generalization performance measures (on the validation set, that is drawn using price vectors)
-            # --------------------------------------
-            # val_metrics['r2'] = sklearn.metrics.r2_score(y_true=true_values, y_pred= value_preds)  # This is R2 coefficient of determination
-            val_metrics['kendall_tau'] = scipy_stats.kendalltau(scaled_value_preds, scaled_true_values).correlation
-            # val_metrics['mae'] = sklearn.metrics.mean_absolute_error(value_preds, true_values)
-            # val_metrics['mae_scaled'] = sklearn.metrics.mean_absolute_error(common_scale_value_preds, common_scale_true_values)
-            val_metrics['r2_centered'] = sklearn.metrics.r2_score(y_true=true_values - np.mean(true_values), y_pred= value_preds - np.mean(value_preds))
-            # a centered R2, because constant shifts in model predictions should not really affect us  
-
-            val_metrics['true_values'] = true_values  # also store all true /predicted values so that we can make true vs predicted plots
-            val_metrics['predicted_values'] = value_preds
-            # val_metrics['inferred_values'] = inferred_values
+        # 1. generalization performance measures (on the validation set, that is drawn using price vectors)
+        if val_loader is not None:
+            metrics['kendall_tau'] = scipy_stats.kendalltau(value_preds_val, true_values_val).correlation
+            metrics['r2_centered'] = sklearn.metrics.r2_score(y_true=true_values_val - np.mean(true_values_val), y_pred= value_preds_val - np.mean(value_preds_val)) # a centered R2, because constant shifts in model predictions should not really affect us  
+            metrics['true_values'] = true_values_val  # also store all true /predicted values so that we can make true vs predicted plots
+            metrics['predicted_values'] = value_preds_val
 
         # --------------------------------------
         
-        # 1.5. If there is a specific loader for generalization performance -> use those for the generalization performance measures (on the validation set, that is drawn by uniformly sampling bundles)
-        # --------------------------------------
-        # if val_loader_gen_only is not None:
-        #     scaled_value_preds_generalization = []
-        #     demand_vectors_generalization = []
-        #     price_vectors_generalization = []
-        #     with torch.no_grad():
-        #         for demand_vector, price_vector in val_loader_gen_only:
-        #             price_vector, demand_vector = price_vector.to(device), demand_vector.to(device)
-        #             scaled_value_prediction = trained_model(demand_vector)
-        #             scaled_value_preds_generalization.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-        #             demand_vectors_generalization.extend(demand_vector.cpu().numpy().tolist())
-        #             price_vectors_generalization.extend(price_vector.cpu().numpy().tolist())
-        
-        #     scaled_value_preds_generalization = np.array(scaled_value_preds_generalization)
-        #     true_values_generalization = np.array([bidder.calculate_value(demand_vector) for demand_vector in demand_vectors_generalization])
-        #     scaled_true_values_generalization = true_values_generalization/scale
-        #     value_preds_generalization = scaled_value_preds_generalization * scale
-            
-            
-        #     val_metrics['r2_generalization'] = sklearn.metrics.r2_score(y_true=true_values_generalization, y_pred=value_preds_generalization)  # This is R2 coefficient of determination
-        #     val_metrics['kendall_tau_generalization'] = scipy_stats.kendalltau(true_values_generalization, value_preds_generalization).correlation
-        #     val_metrics['mae_generalization'] = sklearn.metrics.mean_absolute_error(true_values_generalization, value_preds_generalization)
-        #     val_metrics['r2_centered_generalization'] = sklearn.metrics.r2_score(y_true=true_values_generalization - np.mean(true_values_generalization), y_pred= value_preds_generalization - np.mean(value_preds_generalization))
-
-        #     common_scale = np.mean(true_values_generalization)
-        #     common_scale_generalazation = common_scale  # need the results for regret
-        #     common_scale_true_values_generalization = true_values_generalization / common_scale
-        #     common_scale_value_preds_generalization = value_preds_generalization / common_scale
-
-        #     val_metrics['mae_scaled_generalization'] = sklearn.metrics.mean_absolute_error(common_scale_value_preds_generalization, common_scale_true_values_generalization)
-            
-        #     val_metrics['scaled_true_values_generalization'] = scaled_true_values_generalization  # also store all true /predicted values so that we can make true vs predicted plots
-        #     val_metrics['scaled_predicted_values_generalization'] = scaled_value_preds_generalization
-        #     print(f'Val metrics, generalization only set. R2: {val_metrics["r2_generalization"]}, R2C: {val_metrics["r2_centered_generalization"]} Kendall Tau: {val_metrics["kendall_tau_generalization"]}, MAE: {val_metrics["mae_generalization"]}')
+        # 2. generalization performance measures (on the training set, that is drawn using price vectors)            
+        metrics['kendall_tau_train'] = scipy_stats.kendalltau(true_values_train, value_preds_train).correlation
+        metrics['r2_centered_train'] = sklearn.metrics.r2_score(y_true=true_values_train - np.mean(true_values_train), y_pred= value_preds_train - np.mean(value_preds_train))
+        metrics['true_values_train'] = true_values_train # also store all true /predicted values so that we can make true vs predicted plots
+        metrics['predicted_values_train'] = value_preds_train
 
         # --------------------------------------
-        # 1.6 If the training loader is given -> also measure predictive performance on that 
-        # if train_loader is not None:
-        #     scaled_value_preds_train = []
-        #     demand_vectors_train = []
-        #     price_vectors_train = []
-        #     with torch.no_grad():
-        #         for demand_vector, price_vector in train_loader:
-        #             price_vector, demand_vector = price_vector.to(device), demand_vector.to(device)
-        #             scaled_value_prediction = trained_model(demand_vector)
-        #             scaled_value_preds_train.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-        #             demand_vectors_train.extend(demand_vector.cpu().numpy().tolist())
-        #             price_vectors_train.extend(price_vector.cpu().numpy().tolist())
         
-        #     scaled_value_preds_train = np.array(scaled_value_preds_train)
-        #     true_values_train = np.array([bidder.calculate_value(demand_vector) for demand_vector in demand_vectors_train])
-
-        #     scaled_true_values_train = true_values_train/scale
-        #     value_preds_train = scaled_value_preds_train * scale
-
-        #     inferred_values_train = np.array([np.dot(price_vector, demand_vector) for (price_vector, demand_vector) in zip(price_vectors_train, demand_vectors_train)])
-
-        #     common_scale = np.mean(true_values_train)
-        #     common_scale_true_values_train = true_values_train / common_scale
-        #     common_scale_value_preds_train = value_preds_train / common_scale
+        # 3. DQ loss performance measure (same as training loss)
+        if val_loader is not None:
+            self.max_util_mvnn_model.update_model(trained_model)
+            val_dq_loss = 0
+            predicted_demands = []
+            for (j, price_vector) in enumerate(price_vectors_val):
+                # update the prices in the MIP objective to the price vector of the current datapoint
+                self.max_util_mvnn_model.update_prices_in_objective(price_vector)
             
-        #     val_metrics['r2_train'] = sklearn.metrics.r2_score(y_true=true_values_train, y_pred=value_preds_train)
-        #     val_metrics['r2_centered_train'] = sklearn.metrics.r2_score(y_true=true_values_train - np.mean(true_values_train), y_pred= value_preds_train - np.mean(value_preds_train))
-        #     val_metrics['kendall_tau_train'] = scipy_stats.kendalltau(true_values_train, value_preds_train).correlation
-        #     val_metrics['mae_train'] = sklearn.metrics.mean_absolute_error(true_values_train, value_preds_train)
-        #     val_metrics['mae_scaled_train'] = sklearn.metrics.mean_absolute_error(common_scale_value_preds_train, common_scale_true_values_train)
+                try: 
+                    predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
+                except:
+                    print('MIP is unbounded, something is wrong!')
+                    predicted_demand = np.ones(demand_vector.shape[0])
+                predicted_demands.append(predicted_demand)
 
-        #     # also store all true /predicted values so that we can make true vs predicted plots
-        #     val_metrics['scaled_true_values_train'] = scaled_true_values_train
-        #     val_metrics['scaled_predicted_values_train'] = scaled_value_preds_train
-        #     val_metrics['scaled_inferred_values_train'] = inferred_values_train
+                with torch.no_grad():
+                    predicted_value = trained_model(torch.from_numpy(predicted_demand).float()).item()
+                predicted_utility = predicted_value - np.dot(price_vector, predicted_demand)
 
-        #     print(f'Predictive performance on training set. R2: {val_metrics["r2_train"]}, R2C: {val_metrics["r2_centered_train"]} Kendall Tau: {val_metrics["kendall_tau_train"]}, MAE: {val_metrics["mae_train"]}')
+                predicted_value_at_true_demand = scaled_value_preds_val[j]
+                predicted_utility_at_true_demand = predicted_value_at_true_demand - np.dot(price_vector, demand_vectors_val[j])
 
-        
-        # 2. DQ loss performance measure (same as training loss)
-        # --------------------------------------
-        
-        self.max_util_mvnn_model.update_model(trained_model)
-        val_dq_loss = 0
-        predicted_demands = []
-        for (j, price_vector) in enumerate(price_vectors):
-            # update the prices in the MIP  objective to the price vector of the current datapoint
-            self.max_util_mvnn_model.update_prices_in_objective(price_vector)
+                # compute the loss
+                predicted_utility_difference = predicted_utility - predicted_utility_at_true_demand
+                val_dq_loss += predicted_utility_difference
+                if predicted_utility_difference < - self.mip_params['MIPGap']*10:
+                    print(f'predicted utility difference is negative: {predicted_utility_difference}, something is wrong!')
 
-            # compute the network's predicted answer to the demand query
-        
-            try: 
-                predicted_demand = self.max_util_mvnn_model.get_max_util_bundle()
-                predicted_demand = np.array(predicted_demand)
-            except:
-                print('MIP is unbounded, something is wrong!')
-                predicted_demand = np.ones(demand_vector.shape[0])
-
-            predicted_demands.append(predicted_demand)
-
-        #     # get the predicted value for that answer
-            predicted_value = trained_model(torch.from_numpy(predicted_demand).float()).item()
-
-            predicted_utility = predicted_value - np.dot(price_vector, predicted_demand)
-
-        #     # get the predicted utility for the actual demand vector
-            demand_vector = demand_vectors[j]
-            predicted_value_at_true_demand = scaled_value_preds[j]
-
-            predicted_utility_at_true_demand = predicted_value_at_true_demand - np.dot(price_vector, demand_vector)
-
-        #     # compute the loss
-            predicted_utility_difference = predicted_utility - predicted_utility_at_true_demand
-            val_dq_loss = val_dq_loss + predicted_utility_difference
-            if predicted_utility_difference < - self.mip_params['MIPGap']*10:
-                print(f'predicted utility difference is negative: {predicted_utility_difference}, something is wrong!')
-                # solver._print_info() # NOTE: if you print info on a MIP that is unbounded, it will crush... 
-
-
-        val_metrics['val_dq_loss_scaled'] = val_dq_loss / len(price_vectors)
+            metrics['val_dq_loss_scaled'] = val_dq_loss / len(price_vectors_val)
         # --------------------------------------
 
 
@@ -284,7 +217,7 @@ class ValueFunctionEstimateDQ():
         # val_metrics['mean_regret_scaled'] = val_metrics['mean_regret'] / common_scale_generalazation # regret scaled by the common scale of the generalization set to make numbers interpretable
         # --------------------------------------
 
-        return val_metrics
+        return metrics
 
 
     def __get_scaled_data_split(self, ):
@@ -322,61 +255,40 @@ class ValueFunctionEstimateDQ():
         """
 
         # get the data
-        P_train, P_val, X_train, X_val, _, V_val = self.__get_scaled_data_split()
+        P_train, P_val, X_train, X_val, V_train, V_val = self.__get_scaled_data_split()
 
 
         if type(self.mvnn_params['batch_size']) == str:
             batch_size = len(P_train)
         else:
             batch_size = self.mvnn_params['batch_size']
-        # if batch_size != 1:
-        #     raise NotImplementedError('batch_size != 1 is not implemented yet')
+
         epochs = self.mvnn_params['epochs'] 
         l2_reg = self.mvnn_params['l2_reg']
         learning_rate = self.mvnn_params['learning_rate']
-        print_frequency = self.mvnn_params['print_frequency']
 
 
         train_dataset_demand_queries = torch.utils.data.TensorDataset(torch.from_numpy(X_train).float(),
-                                                                    torch.from_numpy(P_train).float())
+                                                                      torch.from_numpy(P_train).float(),
+                                                                      torch.from_numpy(V_train).float())
         train_loader_demand_queries = torch.utils.data.DataLoader(train_dataset_demand_queries,
-                                                                batch_size= batch_size,
+                                                                batch_size=batch_size,
                                                                 shuffle=True)
         if P_val is not None and X_val is not None:
             val_dataset_demand_queries = torch.utils.data.TensorDataset(torch.from_numpy(X_val).float(),
                                                                         torch.from_numpy(P_val).float(),
                                                                         torch.from_numpy(V_val).float())
             val_loader_demand_queries = torch.utils.data.DataLoader(val_dataset_demand_queries,
-                                                                    batch_size= 1,
+                                                                    batch_size=1,
                                                                     shuffle=True)
         else:
             val_loader_demand_queries = None
 
-        # if P_val_gen_only is not None and X_val_gen_only is not None:
-        #     val_dataset_gen_only = torch.utils.data.TensorDataset(torch.from_numpy(X_val_gen_only).float(),
-        #                                                                 torch.from_numpy(P_val_gen_only).float()
-        #                                                                 )
-
-
-        #     val_loader_gen_only = torch.utils.data.DataLoader(val_dataset_gen_only,
-        #                                                             batch_size= batch_size,
-        #                                                             shuffle=False) 
-            
-        # else:
-        #     val_loader_gen_only = None
-
-        # print('Creating MVNN model with parameters:')
-        # print(f'num_hidden_layers: {self.mvnn_params['num_hidden_layers']}')
-        # print(f'num_hidden_units: {self.mvnn_params['num_hidden_units']}')
-        # print(f'regularisation: {l2_reg}')
-        # print(f'learning_rate: {learning_rate}')
-        # print(f'clip_grad_norm: {clip_grad_norm}')
 
         model = MVNN_GENERIC(input_dim=len(self.capacity_generic_goods[0]),
                             num_hidden_layers=self.mvnn_params['num_hidden_layers'],
                             num_hidden_units=self.mvnn_params['num_hidden_units'],
                             layer_type=self.mvnn_params['layer_type'],
-                            # target_max=self.mvnn_params['target_max'],
                             lin_skip_connection = self.mvnn_params['lin_skip_connection'],
                             dropout_prob = self.mvnn_params['dropout_prob'],
                             init_method = self.mvnn_params['init_method'],
@@ -401,14 +313,13 @@ class ValueFunctionEstimateDQ():
             else:
                 l2_reg_parameters['params'].append(p[1])
 
+
         optimizer = torch.optim.Adam([l2_reg_parameters,no_l2_reg_parameters],
                                     lr = learning_rate)
-
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
                                                             float(epochs))
 
-        metrics = {}
-
+        metrics = []
         for epoch in range(epochs):
             train_loss_dq = self.__dq_train_mvnn_helper(model,
                                                         optimizer,
@@ -416,35 +327,20 @@ class ValueFunctionEstimateDQ():
                                                         device=torch.device('cpu')
                                                         )
             
-            if val_loader_demand_queries is not None:
-                val_metrics = self.__dq_val_mvnn(trained_model = model,
-                                                 val_loader = val_loader_demand_queries,
-                                                 device=torch.device('cpu'))
-                metrics[epoch] = val_metrics
-            else:
-                metrics[epoch] = {}
-            metrics[epoch]["train_dq_loss_scaled"] = train_loss_dq
+            # if val_loader_demand_queries is not None:
+            val_metrics = self.__dq_val_mvnn(trained_model = model,
+                                             val_loader = val_loader_demand_queries,
+                                             train_loader = train_loader_demand_queries,
+                                             device=torch.device('cpu'))
+            metrics.append(val_metrics)
+            metrics[-1]["train_dq_loss_scaled"] = train_loss_dq
 
             scheduler.step()
-            
-            # if val_loader_demand_queries is not None and epoch>=2 and max(metrics[epoch-2]['val_dq_loss_scaled'], metrics[epoch-1]['val_dq_loss_scaled']) < metrics[epoch]['val_dq_loss_scaled']:  # an early stopping condition
-            #         break
 
-            # if epoch>=2 and max(metrics[epoch-2]['train_dq_loss_scaled'], metrics[epoch-1]['train_dq_loss_scaled']) < metrics[epoch]['train_dq_loss_scaled']:  # an early stopping condition
-            #     break
-
-            if train_loss_dq <= 1e-2:
+            if train_loss_dq <= 1e-2: #TODO: find a better stopping criterion
                 break
-
-            # # TODO: remove later since we have W&B
-            # if (epoch+1) % print_frequency == 0:
-            #     if val_loader_demand_queries is not None:
-            #         print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}, val_dq_loss_scaled:{val_metrics["val_dq_loss_scaled"]:.5f}')
-            #             #    , val_kendall_tau:{val_metrics["kendall_tau"]:.5f}, val_r2_centered: {val_metrics["r2_centered"]:.5f}, val_mean_regret:{val_metrics["mean_regret"]:.5f},') val_r2:{val_metrics["r2"]:.5f}, , val_mae:{val_metrics["mae"]:.5f}
-            #     else: 
-            #         print(f'Current epoch: {epoch:>4} | train_dq_loss_scaled:{train_loss_dq:.5f}')
         
-        return model, metrics
+        return model, metrics[-1]  # return the last epoch metrics
 
 
     def get_bundle_value(self, bundle: np.ndarray) -> float:
@@ -490,7 +386,7 @@ class ValueFunctionEstimateDQ():
         ax.plot_surface(X1, X2, X3_pred, label='Predicted')
         ax.legend()
         if wandb_run is not None:
-            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)}, step=step)
+            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)}, step=step, commit=False)
             plt.close(fig)
         else:
             plt.show()
