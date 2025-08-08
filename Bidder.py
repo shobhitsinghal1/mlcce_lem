@@ -325,19 +325,19 @@ class ProsumerSwitch(Prosumer):
 
 
 class LogarithmicBidder(Bidder):
-    def __init__(self, name: str, horizon: int):
+    def __init__(self, name: str, horizon: int, config: dict):
         self.name = name
         self.intervals = horizon
         
         # class specific parameters
-        self.flowlimitup = static_bidder_configs[name]['flowlimitup']
-        self.flowlimitdown = static_bidder_configs[name]['flowlimitdown']
-        self.scale = static_bidder_configs[name]['scale']
-        self.shift = static_bidder_configs[name]['shift']
+        self.flowlimitup = config[name]['flowlimitup']
+        self.flowlimitdown = config[name]['flowlimitdown']
+        self.scale = config[name]['scale']
+        self.shift = config[name]['shift']
         self.full_info_imp = True
 
         # piecewise linear approximation of the logarithmic function
-        self.x_pts = np.linspace(self.flowlimitdown, self.flowlimitup, static_bidder_configs[name]['granularity'])
+        self.x_pts = np.linspace(self.flowlimitdown, self.flowlimitup, config[name]['granularity'])
         self.y_pts = np.log(self.x_pts - self.shift)
         self.xl = self.x_pts[:-1]
         self.xu = self.x_pts[1:]

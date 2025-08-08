@@ -45,7 +45,8 @@ class ValueFunctionEstimateDQ():
         use_gradient_clipping = self.mvnn_params['use_gradient_clipping']
 
         model.train()
-        # loss_dq_list = []
+        loss_dq_list = []
+        dq_pred_error_list = []
 
         for batch_idx, (demand_vectors, price_vectors, _) in enumerate(train_loader_demand_queries):
             price_vectors, demand_vectors = price_vectors.to(device), demand_vectors.to(device)
@@ -88,6 +89,9 @@ class ValueFunctionEstimateDQ():
                     print(f'predicted utility difference is negative: {predicted_utility_difference}, something is wrong!')
 
                 loss += torch.relu(predicted_utility_difference)   # for numerical stability
+
+                loss_dq_list.append(predicted_utility_difference.detach().numpy()[0])
+                dq_pred_error_list.append(np.linalg.norm(predicted_demand - demand_vector.numpy(), ord = 2))
             
             
             loss = loss / len(price_vectors)
@@ -98,7 +102,7 @@ class ValueFunctionEstimateDQ():
             optimizer.step()
             model.transform_weights()
 
-        return loss.detach().numpy()[0]
+        return np.mean(loss_dq_list), np.mean(dq_pred_error_list)
 
 
     def __dq_val_mvnn(self, trained_model, val_loader, train_loader, device):
@@ -150,6 +154,8 @@ class ValueFunctionEstimateDQ():
         # 1. generalization performance measures (on the validation set, that is drawn using price vectors)
         if val_loader is not None:
             metrics['kendall_tau'] = scipy_stats.kendalltau(value_preds_val, true_values_val).correlation
+            if np.isnan(metrics['kendall_tau']):
+                metrics['kendall_tau'] = 0.0
             metrics['r2_centered'] = sklearn.metrics.r2_score(y_true=true_values_val - np.mean(true_values_val), y_pred= value_preds_val - np.mean(value_preds_val)) # a centered R2, because constant shifts in model predictions should not really affect us  
             metrics['true_values'] = true_values_val  # also store all true /predicted values so that we can make true vs predicted plots
             metrics['predicted_values'] = value_preds_val
@@ -158,6 +164,8 @@ class ValueFunctionEstimateDQ():
         
         # 2. generalization performance measures (on the training set, that is drawn using price vectors)            
         metrics['kendall_tau_train'] = scipy_stats.kendalltau(true_values_train, value_preds_train).correlation
+        if np.isnan(metrics['kendall_tau_train']):
+                metrics['kendall_tau_train'] = 0.0
         metrics['r2_centered_train'] = sklearn.metrics.r2_score(y_true=true_values_train - np.mean(true_values_train), y_pred= value_preds_train - np.mean(value_preds_train))
         metrics['true_values_train'] = true_values_train # also store all true /predicted values so that we can make true vs predicted plots
         metrics['predicted_values_train'] = value_preds_train
@@ -320,8 +328,10 @@ class ValueFunctionEstimateDQ():
                                                             float(epochs))
 
         metrics = []
+        best_val_loss = np.inf
+        patience = 0
         for epoch in range(epochs):
-            train_loss_dq = self.__dq_train_mvnn_helper(model,
+            train_loss_dq, dq_pred_error = self.__dq_train_mvnn_helper(model,
                                                         optimizer,
                                                         train_loader_demand_queries,
                                                         device=torch.device('cpu')
@@ -334,11 +344,27 @@ class ValueFunctionEstimateDQ():
                                              device=torch.device('cpu'))
             metrics.append(val_metrics)
             metrics[-1]["train_dq_loss_scaled"] = train_loss_dq
+            metrics[-1]["dq_pred_error"] = dq_pred_error
 
             scheduler.step()
 
-            if train_loss_dq <= 1e-2: #TODO: find a better stopping criterion
-                break
+            
+            if self.mvnn_params['stopping_condition'] == 'early_stop':
+                if metrics[-1]['val_dq_loss_scaled'] < best_val_loss:
+                    best_val_loss = metrics[-1]['val_dq_loss_scaled']
+                    best_checkpoint = model.state_dict()
+                else:
+                    patience += 1
+                    if patience >= 5:  # early stopping patience
+                        self.trained_model.load_state_dict(best_checkpoint)
+                        break
+            elif self.mvnn_params['stopping_condition'] == 'train_loss':
+                if metrics[-1]["train_dq_loss_scaled"] <= 1e-2:
+                    break
+            elif self.mvnn_params['stopping_condition'] == 'val_loss':
+                if metrics[-1]['val_dq_loss_scaled'] <= 1e-2:
+                    break
+
         
         return model, metrics[-1]  # return the last epoch metrics
 
@@ -363,7 +389,7 @@ class ValueFunctionEstimateDQ():
         return self.max_util_mvnn_model.get_max_util_bundle()
 
 
-    def plot_nn(self, bidder: Bidder, step, wandb_run = None):
+    def plot_nn(self, bidder: Bidder, step, id, wandb_run = None):
         assert len(self.capacity_generic_goods[0]) == 2, "Plotting is only supported for 2D"
 
         bounds = self.capacity_generic_goods
@@ -386,7 +412,7 @@ class ValueFunctionEstimateDQ():
         ax.plot_surface(X1, X2, X3_pred, label='Predicted')
         ax.legend()
         if wandb_run is not None:
-            wandb_run.log({f"Value_estimator_plot/{bidder.name}": wandb.Image(fig)}, step=step, commit=False)
+            wandb_run.log({f"Value_estimator_plot/Participant {id}": wandb.Image(fig)}, step=step, commit=False)
             plt.close(fig)
         else:
             plt.show()
@@ -397,28 +423,33 @@ if __name__ == "__main__":
 
     # run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu')
 
+    nprices = 20
+    price_scale = 100
     horizon = 6
-    nprices = 100
+    price_list = [np.random.rand(horizon) * price_scale for _ in range(nprices)]
+    bidder_configs = 'configs/bidder_configs_random6.json'
+    bidder_type = 'ProsumerSwitch'
+    bidder_name = 'Switch0'
+
+    with open(bidder_configs, 'r') as f:
+            configs = json.load(f)
+    bidders = [eval(bidder_type)(bidder_name, horizon=horizon, config=configs[bidder_name])]
 
     def objective(trial):
-
-        for key in mvnn_params.keys():
+        for key in mvnn_params[bidder_type].keys():
             if key in mvnn_params_hpopt.keys():
-                mvnn_params[key] = eval('trial.suggest_' + mvnn_params_hpopt[key][0])(key, **mvnn_params_hpopt[key][1])
-                
-        
-        # bidder = LogarithmicBidder('bidder2_1')
-        bidders = [ProsumerStorage('EV2', horizon=horizon), ProsumerStorage('HomeStorage1', horizon=horizon), ProsumerRenewable('Solar1', horizon=horizon)]
-        estimators = [ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params, mip_params, price_scale=100) for bidder in bidders]
-        
-        price_list = [nprices * (np.random.rand(horizon)*2-1) for i in range(100)]
+                mvnn_params[bidder_type][key] = eval('trial.suggest_' + mvnn_params_hpopt[key][0])(key, **mvnn_params_hpopt[key][1])
 
+        estimators = [ValueFunctionEstimateDQ(bidder.get_capacity_generic_goods(), mvnn_params[bidder_type], mip_params, price_scale=price_scale) for bidder in bidders]
 
         queried_bundles = []
         true_values = []
         train_loss = []
-        times = []
+        val_loss = []
+        kendall_tau = []
+        dq_pred_error = []
         r2 = []
+        times = []
         for bidder, estimator in zip(bidders, estimators):
             queried_bundles.append([])
             true_values.append([])
@@ -428,22 +459,25 @@ if __name__ == "__main__":
                 true_values.append(value)
                 estimator.add_data_point(price_list[i], bundle, value)
 
-                if i in list(np.arange(10, nprices, 20, dtype=int)):
+                if i in list(np.arange(5, nprices, 2, dtype=int)):
                     start = time.time()
                     model, metrics = estimator.dq_train_mvnn()
-                    train_loss.append(metrics[list(metrics.keys())[-1]]['train_dq_loss_scaled'])
-                    # r2.append(metrics[list(metrics.keys())[-1]]['r2_centered'])
                     times.append(time.time() - start)
+                    train_loss.append(metrics['train_dq_loss_scaled'])
+                    val_loss.append(metrics['val_dq_loss_scaled'])
+                    kendall_tau.append(metrics['kendall_tau'])
+                    r2.append(metrics['r2_centered'])
+                    dq_pred_error.append(metrics['dq_pred_error'])
 
-        # return np.mean(val_loss), np.mean(r2), np.mean(times)
-        np.mean(train_loss), np.mean(times)
+        return np.percentile(dq_pred_error, 75), np.percentile(kendall_tau, 25), np.percentile(r2, 25), np.mean(times)
 
-    study = optuna.create_study(directions=["minimize", "minimize"], sampler=optuna.samplers.TPESampler(seed=0))
+    study = optuna.create_study(directions=["minimize", "maximize", "maximize", "minimize"], sampler=optuna.samplers.TPESampler(seed=0))
     study.optimize(objective, timeout=1800)
 
     trials = sorted(study.best_trials, key=lambda t: t.values[0])
     [print(trial.params) for trial in trials]
     [print(trial.values) for trial in trials]
+    optuna.visualization.plot_param_importances(study).show(redered='browser')
     # print("Accuracy: {}".format(trial.value))
     # print("Best hyperparameters: {}".format(trial.params))
 

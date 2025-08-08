@@ -9,44 +9,10 @@
     },
     "random6": {
         "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
-        "N": [2, 2, 2, 2, 2],
+        "N": [1, 1, 1, 1, 1],
         "price_max": 80,
         "price_min": 0,
         "imbalance_tol_coef": 0.01,
         "horizon": 6
-    },
-    "community2": {
-        "bidders": ["EV2", "HomeStorage1", "HeatPump1", "Solar1", "Consumer1"],
-        "price_max": 80,
-        "price_min": 0,
-        "imbalance_tol_coef": 0.01,
-        "horizon": 6
-    },
-    "community1": {
-        "bidders": ["EV1", "EV2", "EV3"],
-        "price_max": 200,
-        "imbalance_tol_coef": 0.1,
-        "horizon": 2
-    },
-    "dummy_logarithmic_community": {
-        "bidders": ["bidder1", "bidder2", "bidder3", "bidder4", "bidder5"],
-        "price_max": 20,
-        "price_min": -20,
-        "imbalance_tol_coef": 0.001,
-        "horizon": 2
-    },
-    "dummy_logarithmic_community_1": {
-        "bidders": ["bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1", "bidder1_1"],
-        "price_init": [[100, 100], [50, 50], [200, 200], [0, 0], [-200, -200], [-100, -100], [-50, -50]],
-        "price_max": 200,
-        "imbalance_tol_coef": 0.01,
-        "horizon": 2
-    },
-    "dummy_logarithmic_community_2": {
-        "bidders": ["bidder2_1", "bidder1_1", "bidder2_1", "bidder1_1", "bidder2_1", "bidder1_1", "bidder2_1", "bidder1_1", "bidder2_1", "bidder1_1"],
-        "price_init": [[100, 100], [50, 50], [25, 25], [0, 0], [-25, -25], [-100, -100], [-50, -50]],
-        "price_max": 100,
-        "imbalance_tol_coef": 0.01,
-        "horizon": 2
     }
 }

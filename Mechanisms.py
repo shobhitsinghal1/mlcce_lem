@@ -39,14 +39,16 @@ class MLCCE:
         self.imbalance_norm = []
         self.value_estimator_metrics = [{'train_dq_loss_scaled': [], 'val_dq_loss_scaled': [],
                                          'r2_centered': [], 'r2_centered_train': [],
-                                         'kendall_tau': [], 'kendall_tau_train': []} for _ in range(self.num_participants)] # mentioned metrics are being tracked
+                                         'kendall_tau': [], 'kendall_tau_train': [],
+                                         'dq_pred_error': []} for _ in range(self.num_participants)] # mentioned metrics are being tracked
         self.train_timer = Timer('train_timer', logger=None)
         self.next_price_timer = Timer('next_price_timer', logger=None)
         
         # value estimators initialized
         self.value_estimators = [ValueFunctionEstimateDQ(capacity_generic_goods=self.capacities[i],
-                                                         mvnn_params=mvnn_params,
+                                                         mvnn_params=mvnn_params[bidders[i].__class__.__name__],
                                                          mip_params=mip_params,
+                                                         price_scale=np.max(np.abs(price_bound)) # TODO: see if this works as expected
                                                         ) for i in range(self.num_participants)]
 
 
@@ -173,7 +175,7 @@ class MLCCE:
             [self.wandb_run.log({f"{key}/Participant {i}": self.value_estimator_metrics[i][key][-1]}, step=self.n_init_prices+self.mlcce_iter, commit=False) for key in self.value_estimator_metrics[i].keys() for i in range(self.num_participants)]
             self.wandb_run.log({"MLCCE Train time": self.train_timer.timers.total('train_timer')}, step=self.n_init_prices+self.mlcce_iter, commit=False)
             if self.n_products == 2:
-                [estimator.plot_nn(bidder, self.n_init_prices+self.mlcce_iter, wandb_run=self.wandb_run) for bidder, estimator in zip(self.bidders, self.value_estimators)]
+                [estimator.plot_nn(bidder, self.n_init_prices+self.mlcce_iter, id=i, wandb_run=self.wandb_run) for i, (bidder, estimator) in enumerate(zip(self.bidders, self.value_estimators))]
             self.wandb_run.log({"MLCCE Next price time": self.next_price_timer.timers.total('next_price_timer')}, step=self.n_init_prices+self.mlcce_iter, commit=False)
         
         # Post-processing
@@ -183,6 +185,20 @@ class MLCCE:
         
         
         return clearing_price, dispatch
+
+
+def log_mech_metrics(self, price, bundle, value, step):
+    [self.wandb_run.log({f"Price/Product {i}": price[i]}, step=step, commit=False) for i in range(len(price))] # log prices
+
+    imb = np.sum(bundle, 0)
+    total_capacity = np.sum(self.capacities, 0)
+    rel_imb = np.where(imb >= 0, imb * 100 / total_capacity[1], imb * 100 / total_capacity[0])
+    imbalance_norm = np.linalg.norm(rel_imb, 1)
+    self.imbalance_norm.append(imbalance_norm)
+    [self.wandb_run.log({f"Imbalance/Product {i}": rel_imb[i]}, step=step, commit=False) for i in range(self.n_products)] # log imbalance
+    self.wandb_run.log({f"Imbalance_norm": imbalance_norm}, step=step, commit=False)
+
+    self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
 
 
 class CCE:
@@ -269,11 +285,15 @@ class CCE:
 class CHP_fullinfo:
     def __init__(self, bidders: list, price_bound: tuple, wandb_run):
         self.bidders = bidders
+        self.wandb_run = wandb_run
+
+        # Params
         self.capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
         print(f'Capacities: {np.round(np.sum(self.capacities, 0), 0)}')
         self.n_products = len(self.capacities[0][0])
         self.price_bound = price_bound
-        self.wandb_run = wandb_run
+
+        self.imbalance_norm = []
 
 
     def run(self, ):
@@ -299,15 +319,17 @@ class CHP_fullinfo:
         print(f'CHP imbalance: {np.round(imb, 2)}')
         print(f'CHP clearing price: {np.round(solution.x, 2)}')
         print(f'CHP Lagrangian: {objective(solution.x):.2f}')
-
         dispatch = [bidder.bundle_query(solution.x)[0] for bidder in self.bidders]
-
-        fig, ax = plt.subplots()
-        [ax.plot(np.arange(1, self.n_products+1, 1), dispatch[i], label=f'{self.bidders[i].get_name()}') for i in range(len(dispatch))]
-        ax.legend()
         
-        if self.wandb_run is not None:
-            self.wandb_run.log({f"CHP_dispatch": wandb.Image(fig)}, commit=False)
+        log_mech_metrics(self, price=solution.x, bundle=dispatch, value=objective(solution.x), step=1)
+
+
+        # fig, ax = plt.subplots()
+        # [ax.plot(np.arange(1, self.n_products+1, 1), dispatch[i], label=f'{self.bidders[i].get_name()}') for i in range(len(dispatch))]
+        # ax.legend()
+        
+        # if self.wandb_run is not None:
+        #     self.wandb_run.log({f"CHP_dispatch": wandb.Image(fig)}, commit=False)
         
         return solution.x, dispatch
     
