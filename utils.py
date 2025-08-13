@@ -11,13 +11,13 @@ mip_params = {
 }
 
 next_price_params = {
-    'method': 'SLSQP',
+    'method': 'COBYQA',
     'prox_coef': 0,
 }
 
 cce_params = {
     'max_iter': 40,
-    'base_step': 0.1,
+    'base_step': 0.5,
     'decay': 0.6,
 }
 
@@ -50,7 +50,8 @@ mvnn_params = {
         'init_Var': 0.09,
         'init_b': 0.05,
         'init_bias': 0.05,
-        'init_little_const': 0.1,},
+        'init_little_const': 0.1,
+        'device': 'cpu'},
 
     'ProsumerRenewable': {
         'clip_grad_norm': 1,
@@ -73,7 +74,8 @@ mvnn_params = {
         'init_Var': 0.09,
         'init_b': 0.05,
         'init_bias': 0.05,
-        'init_little_const': 0.1,},
+        'init_little_const': 0.1,
+        'device': 'cpu'},
     
     'ProsumerConsumer': {
         'clip_grad_norm': 1,
@@ -96,7 +98,8 @@ mvnn_params = {
         'init_Var': 0.09,
         'init_b': 0.05,
         'init_bias': 0.05,
-        'init_little_const': 0.1,},
+        'init_little_const': 0.1,
+        'device': 'cpu'},
     
     'ProsumerSwitch': {
         'clip_grad_norm': 1,
@@ -119,7 +122,8 @@ mvnn_params = {
         'init_Var': 0.09,
         'init_b': 0.05,
         'init_bias': 0.05,
-        'init_little_const': 0.1,}
+        'init_little_const': 0.1,
+        'device': 'cpu'}
     
 }
 
@@ -133,9 +137,7 @@ mvnn_params_hpopt = {
     'num_hidden_layers': ['int', {'low': 1, 'high': 3}],
     'num_hidden_units': ['int', {'low': 2, 'high': 10}],
     'lin_skip_connection': ['categorical', {'choices': [True, False]}],
-    'stopping_condition': ['categorical', {'choices': ['train_loss', 'val_loss', 'early_stop']}]
-    # 'dropout_prob': ['float', {'low': 0, 'high': 0.2}],
-    # 'trainable_ts': ['categorical', {'choices': [True, False]}],
+    'stopping_condition': ['categorical', {'choices': ['train_loss', 'val_loss', 'early_stop']}],
 }
 
 # asset_configs = json.load(open('configs/asset_configs.json'))
@@ -144,6 +146,20 @@ community_configs = json.load(open('configs/community_configs.json'))
 def gurobi_status_converter(int_status):
         status_table = ['woopsies!', 'LOADED', 'OPTIMAL', 'INFEASIBLE', 'INF_OR_UNBD', 'UNBOUNDED', 'CUTOFF', 'ITERATION_LIMIT', 'NODE_LIMIT', 'TIME_LIMIT', 'SOLUTION_LIMIT', 'INTERRUPTED', 'NUMERIC', 'SUBOPTIMAL', 'INPROGRESS', 'USER_OBJ_LIMIT']
         return status_table[int_status]
+
+
+def log_mech_metrics(self, price, bundle, value, step):
+    [self.wandb_run.log({f"Price/Product {i}": price[i]}, step=step, commit=False) for i in range(self.n_products)] # log prices
+
+    imb = np.sum(bundle, 0)
+    total_capacity = np.sum(self.capacities, 0)
+    rel_imb = np.where(imb >= 0, imb * 100 / total_capacity[1], imb * 100 / total_capacity[0])
+    imbalance_norm = np.linalg.norm(rel_imb, 1)
+    self.imbalance_norm.append(imbalance_norm)
+    [self.wandb_run.log({f"Imbalance/Product {i}": rel_imb[i]}, step=step, commit=False) for i in range(self.n_products)] # log imbalance
+    self.wandb_run.log({f"Imbalance_norm": imbalance_norm}, step=step, commit=False)
+
+    self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
 
 
 def make_bidder_configs(community):
@@ -236,4 +252,4 @@ def make_bidder_configs(community):
         json.dump(configs, f, indent=4)
 
 if __name__ == "__main__":
-    make_bidder_configs('random6')
+    make_bidder_configs('random6_20')

@@ -1,0 +1,54 @@
+{
+    "StorageEnerFlex0": {
+        "type": "ProsumerStorageFlex",
+        "oppeprice": [50, 60],
+        "oppfprice": [20, 20],
+        "alphae": [-0.3, -0.2],
+        "alphaf": [-0.2, -0.3],
+        "su": 40,
+        "s0": 20,
+        "fixflex": false,
+        "fixener": false
+    },
+    "StorageEnerFlex1": {
+        "type": "ProsumerStorageFlex",
+        "oppeprice": [60, 50],
+        "oppfprice": [20, 20],
+        "alphae": [-0.3, -0.2],
+        "alphaf": [-0.2, -0.3],
+        "su": 40,
+        "s0": 20,
+        "fixflex": false,
+        "fixener": false
+    },
+    "DSO0": {
+        "type": "ProsumerDSO",
+        "oppfprice": [40, 40],
+        "alphaf": [-1, -1],
+        "flexlimit": [10, 10],
+        "fixflex": false,
+        "fixener": false
+    },
+    "DSO1": {
+        "type": "ProsumerDSO",
+        "oppfprice": [40, 40],
+        "alphaf": [-0.3, -0.3],
+        "flexlimit": [10, 10],
+        "fixflex": false,
+        "fixener": false
+    },
+    "ConsumerFlex0": {
+        "type": "ProsumerConsumerFlex",
+        "oppcprice": [40, 50],
+        "alphae": [-0.3, -0.3],
+        "consumption": [10, 20],
+        "fixener": false
+    },
+    "RenewableFlex0": {
+        "type": "ProsumerRenewableFlex",
+        "oppdprice": [35, 45],
+        "alphae": [-0.3, -0.3],
+        "generation": [10, 20],
+        "fixener": false
+    }
+}

@@ -29,9 +29,9 @@ class Bidder(ABC):
 
 class Prosumer(Bidder):
 
-    def __init__(self, name: str, horizon: int, config: dict):
+    def __init__(self, name: str, n_product: int, config: dict):
         self.name = name
-        self.horizon = horizon
+        self.n_product = n_product
         self.config = config
 
         self.gpenv = gp.Env(params={'LogToConsole': 0, 'OutputFlag': 0})
@@ -41,10 +41,10 @@ class Prosumer(Bidder):
         self.full_info_imp = False
 
 
-    def get_param_values(self, param_name: str) -> dict:
+    def get_param_values(self, param_name: str, length: int = 0) -> dict:
         param_values = {}
-        if isinstance(self.config[param_name], list):
-            for j in range(self.horizon):
+        if length>0:
+            for j in range(length):
                 param_values[j] = self.config[param_name][j]
         else:
             param_values = self.config[param_name]
@@ -62,13 +62,22 @@ class Prosumer(Bidder):
     def get_value_obj_expr(self, m: dict):
         pass
 
+    
+    def add_model(self, model: gp.Model):
+        m = {'model': model}
+        self.add_asset_params_vars(m)
+        self.add_asset_constraints(m)
+        expr = self.get_value_obj_expr(m)
+
+        return m['p'], expr
+
 
     def add_dq_objective(self, m: dict, price: np.ndarray):
         #objective
 
         m['model'].setObjective(
             self.get_value_obj_expr(m)
-            - gp.quicksum(m['p'][h]*price[h] for h in m['H']),
+            - gp.quicksum(m['p'][h]*price[h] for h in range(self.n_product)),
             GRB.MAXIMIZE
         )
 
@@ -93,7 +102,7 @@ class Prosumer(Bidder):
         self.add_asset_params_vars(model)
         self.add_asset_constraints(model)
         model['con_bundle'] = model['model'].addConstrs((model['p'][h] == 0 for h in model['H']), name=f'con_bundle_{self.name}')
-        self.add_dq_objective(model, np.zeros(self.horizon))
+        self.add_dq_objective(model, np.zeros(self.n_product))
 
         return model
 
@@ -104,7 +113,7 @@ class Prosumer(Bidder):
         :param prices: price vector.
         :return: bundle, utility.
         """
-        assert len(price) == self.horizon, "Price vector length must match the horizon length."
+        assert len(price) == self.n_product, "Price vector length must match the number of products."
         
         self.add_dq_objective(self.dq_model, price)
         
@@ -112,7 +121,7 @@ class Prosumer(Bidder):
         self.dq_model['model'].optimize()
 
         try:
-            bundle = np.array([self.dq_model['p'][h].x for h in self.dq_model['H']])
+            bundle = np.array([self.dq_model['p'][h].x for h in range(self.n_product)])
         except:
             raise ValueError(f"The prosumer greedy bundle model is {gurobi_status_converter(self.dq_model['model'].status)}.")
         
@@ -120,9 +129,9 @@ class Prosumer(Bidder):
 
 
     def get_value(self, bundle: np.ndarray) -> float:
-        assert len(bundle) == self.horizon, "Bundle length must match the horizon length."
+        assert len(bundle) == self.n_product, "Bundle length must match the number of products."
         
-        [self.value_model['con_bundle'][i].setAttr(GRB.Attr.RHS, bundle[i]) for i in range(self.horizon)]
+        [self.value_model['con_bundle'][i].setAttr(GRB.Attr.RHS, bundle[i]) for i in range(self.n_product)]
 
         self.value_model['model'].update()
         self.value_model['model'].optimize()
@@ -136,7 +145,7 @@ class Prosumer(Bidder):
     def get_capacity_generic_goods(self, ) -> list:
         """ returns the list of lower and upper bounds """
         bounds = [[], []]
-        for i in range(self.horizon):
+        for i in range(self.n_product):
             for j, sense in enumerate([-1, 1]):
                 self.capacity_model['model'].setObjective(self.capacity_model['p'][i] * sense, GRB.MAXIMIZE)
                 self.capacity_model['model'].update()
@@ -155,14 +164,14 @@ class ProsumerRenewable(Prosumer):
 
     def add_asset_params_vars(self, m: dict):
         
-        nH = self.horizon
+        nH = self.n_product
 
         #sets
         m['H'] = list(range(nH))
 
         # preference parameters
-        m['oppdprice'] = self.get_param_values('oppdprice') # (h)
-        m['generation'] = self.get_param_values('generation')
+        m['oppdprice'] = self.get_param_values('oppdprice', nH) # (h)
+        m['generation'] = self.get_param_values('generation', nH)
 
         # variables
         m['p'] = m['model'].addVars(m['H'], name=f'p_{self.name}', lb=float('-inf')) # power for storage
@@ -186,14 +195,14 @@ class ProsumerConsumer(Prosumer):
 
     def add_asset_params_vars(self, m: dict):
         
-        nH = self.horizon
+        nH = self.n_product
 
         #sets
         m['H'] = list(range(nH))
 
         # preference parameters
-        m['oppcprice'] = self.get_param_values('oppcprice') # (h)
-        m['consumption'] = self.get_param_values('consumption')
+        m['oppcprice'] = self.get_param_values('oppcprice', nH) # (h)
+        m['consumption'] = self.get_param_values('consumption', nH)
 
         # variables
         m['p'] = m['model'].addVars(m['H'], name=f'p_{self.name}', lb=float('-inf'))
@@ -250,7 +259,7 @@ class ProsumerStorage(Prosumer):
 
     def add_asset_params_vars(self, m: dict):
         
-        nH = self.horizon
+        nH = self.n_product
 
         #sets
         m['H'] = list(range(nH))
@@ -259,17 +268,17 @@ class ProsumerStorage(Prosumer):
         m['M'] = 1000 # Is there a better way to do this - like the one in mvnn mip?
 
         # preference parameters
-        m['oppcprice'] = self.get_param_values('oppcprice') # (h) lower limit violation penalty coeff
-        m['oppdprice'] = self.get_param_values('oppdprice') # (h) upper limit violation penalty coeff
-        m['available'] = self.get_param_values('available')
-        m['su'] = self.get_param_values('su') # (h) SoC upper limit
-        m['sl'] = self.get_param_values('sl') # (h) SoC lower limit
+        m['oppcprice'] = self.get_param_values('oppcprice', nH) # (h) lower limit violation penalty coeff
+        m['oppdprice'] = self.get_param_values('oppdprice', nH) # (h) upper limit violation penalty coeff
+        m['available'] = self.get_param_values('available', nH)
+        m['su'] = self.get_param_values('su', nH) # (h) SoC upper limit
+        m['sl'] = self.get_param_values('sl', nH) # (h) SoC lower limit
         m['s0'] = self.get_param_values('s0') # () initial SoC
         m['sn'] = self.get_param_values('sn') # () terminal SoC
         m['alpha'] = self.get_param_values('alpha')
         m['eta'] = self.get_param_values('eta') # () charging efficiency
-        m['gamma'] = self.get_param_values('gamma') # (h) dissipation rate
-        m['beta'] = self.get_param_values('beta') # (h) storage degradation coeff
+        m['gamma'] = self.get_param_values('gamma', nH) # (h) dissipation rate
+        m['beta'] = self.get_param_values('beta', nH) # (h) storage degradation coeff
         m['power_limit_up'] = self.get_param_values('power_limit_up') # () ramp limit
         m['power_limit_down'] = self.get_param_values('power_limit_down') # () ramp limit
 
@@ -301,13 +310,13 @@ class ProsumerSwitch(Prosumer):
 
     def add_asset_params_vars(self, m: dict):
         
-        nH = self.horizon
+        nH = self.n_product
 
         #sets
         m['H'] = list(range(nH))
 
         # preference parameters
-        m['oppcprice'] = self.get_param_values('oppcprice') # (h) lower limit violation penalty coeff
+        m['oppcprice'] = self.get_param_values('oppcprice', nH) # (h) lower limit violation penalty coeff
         m['capacity'] = self.get_param_values('capacity')
         m['tr'] = self.get_param_values('tr')
         m['tl'] = self.get_param_values('tl')
@@ -324,6 +333,183 @@ class ProsumerSwitch(Prosumer):
         return
 
 
+class ProsumerStorageFlex(Prosumer):
+
+    def add_asset_constraints(self, m: dict):
+
+        m['model'].addConstrs((m['s0'] + gp.quicksum(m['pe'][h] + m['pf'][h] for h in range(nh+1)) <= m['su'] for nh in m['H']), name=f'cons1u_{self.name}')
+        m['model'].addConstrs((m['s0'] + gp.quicksum(m['pe'][h] + m['pf'][h] for h in range(nh+1)) >= 0 for nh in m['H']), name=f'cons1l_{self.name}')
+        m['model'].addConstrs((m['s0'] + gp.quicksum(m['pe'][h] - m['pf'][h] for h in range(nh+1)) <= m['su'] for nh in m['H']), name=f'cons2u_{self.name}')
+        m['model'].addConstrs((m['s0'] + gp.quicksum(m['pe'][h] - m['pf'][h] for h in range(nh+1)) >= 0 for nh in m['H']), name=f'cons2l_{self.name}')
+
+        if m['fixflex'] is not None:
+            m['model'].addConstrs((m['pf'][h] == m['fixflex'][h] for h in m['H']), name=f'cons5_{self.name}')
+        if m['fixener'] is not None:
+            m['model'].addConstrs((m['pe'][h] == m['fixener'][h] for h in m['H']), name=f'cons6_{self.name}')
+
+        m['model'].addConstrs((m['p'][h] == m['pe'][h] for h in m['H']), name=f'cons3_{self.name}')
+        m['model'].addConstrs((m['p'][h + m['nH']] == m['pf'][h] for h in m['H']), name=f'cons4_{self.name}')
+
+        return
+
+
+    def get_value_obj_expr(self, m: dict):
+        return gp.quicksum(m['alphae'][h]*m['pe'][h]*m['pe'][h] + m['oppeprice'][h] * m['pe'][h] for h in m['H']) + gp.quicksum(m['alphaf'][h]*m['pf'][h]*m['pf'][h] + m['oppfprice'][h] * m['pf'][h] for h in m['H'])
+
+
+    def add_asset_params_vars(self, m: dict):
+        
+        assert self.n_product % 2 == 0, "The number of products must be even for ProsumerStorageEnerFlexToy."
+        m['nH'] = int(self.n_product/2)
+
+        #sets
+        m['H'] = list(range(m['nH']))
+
+        # preference parameters
+        m['oppeprice'] = self.get_param_values('oppeprice', m['nH']) # (h)
+        m['oppfprice'] = self.get_param_values('oppfprice', m['nH']) # (h)
+        m['alphae'] = self.get_param_values('alphae', m['nH']) # (h) 
+        m['alphaf'] = self.get_param_values('alphaf', m['nH']) # (h)
+        m['su'] = self.get_param_values('su') # () SoC upper limit
+        m['s0'] = self.get_param_values('s0') # () initial SoC
+        m['fixflex'] = None if not self.config['fixflex'] else self.get_param_values('fixflex', m['nH'])
+        m['fixener'] = None if not self.config['fixener'] else self.get_param_values('fixener', m['nH'])
+
+        # variables
+        m['pe'] = m['model'].addVars(m['H'], name=f'pe_{self.name}', lb=float('-inf')) # power for storage
+        m['pf'] = m['model'].addVars(m['H'], name=f'pf_{self.name}', lb=float('-inf'), ub=0) # flexibility
+
+        m['p'] = m['model'].addVars(list(range(self.n_product)), name=f'p_{self.name}', lb=float('-inf')) # products
+
+        return
+
+
+class ProsumerDSO(Prosumer):
+
+    def add_asset_constraints(self, m: dict):
+
+        m['model'].addConstrs((m['pe'][h] == 0 for h in m['H']), name=f'conD1_{self.name}')
+        m['model'].addConstrs((m['pf'][h] <= m['flexlimit'][h] for h in m['H']), name=f'conD2_{self.name}')
+
+        if m['fixflex'] is not None:
+            m['model'].addConstrs((m['pf'][h] == m['fixflex'][h] for h in m['H']), name=f'cons5_{self.name}')
+        if m['fixener'] is not None:
+            m['model'].addConstrs((m['pe'][h] == m['fixener'][h] for h in m['H']), name=f'cons6_{self.name}')
+
+        m['model'].addConstrs((m['p'][h] == m['pe'][h] for h in m['H']), name=f'cons3_{self.name}')
+        m['model'].addConstrs((m['p'][h + m['nH']] == m['pf'][h] for h in m['H']), name=f'cons4_{self.name}')
+
+        return
+
+
+    def get_value_obj_expr(self, m: dict):
+        return gp.quicksum(m['alphaf'][h]*m['pf'][h]*m['pf'][h] + m['oppfprice'][h] * m['pf'][h] for h in m['H'])
+
+
+    def add_asset_params_vars(self, m: dict):
+        
+        assert self.n_product % 2 == 0, "The number of products must be even for ProsumerStorageEnerFlexToy."
+        m['nH'] = int(self.n_product/2)
+
+        #sets
+        m['H'] = list(range(m['nH']))
+
+        # preference parameters
+        m['oppfprice'] = self.get_param_values('oppfprice', m['nH']) # (h)
+        m['alphaf'] = self.get_param_values('alphaf', m['nH']) # (h)
+        m['flexlimit'] = self.get_param_values('flexlimit', m['nH']) # (h) flexibility limit
+        m['fixflex'] = None if not self.config['fixflex'] else self.get_param_values('fixflex', m['nH'])
+        m['fixener'] = None if not self.config['fixener'] else self.get_param_values('fixener', m['nH'])
+
+        # variables
+        m['pe'] = m['model'].addVars(m['H'], name=f'pe_{self.name}', lb=float('-inf')) # power
+        m['pf'] = m['model'].addVars(m['H'], name=f'pf_{self.name}') # flexibility - can only buy
+
+        m['p'] = m['model'].addVars(list(range(self.n_product)), name=f'p_{self.name}', lb=float('-inf')) # products
+
+        return
+
+
+class ProsumerConsumerFlex(Prosumer):
+
+    def add_asset_params_vars(self, m: dict):
+        assert self.n_product % 2 == 0, "The number of products must be even for ProsumerConsumerFlex."
+        m['nH'] = int(self.n_product/2)
+
+        #sets
+        m['H'] = list(range(m['nH']))
+
+        # preference parameters
+        m['oppcprice'] = self.get_param_values('oppcprice', m['nH']) # (h)
+        m['consumption'] = self.get_param_values('consumption', m['nH'])
+        m['alphae'] = self.get_param_values('alphae', m['nH']) # (h)
+        m['fixener'] = None if not self.config['fixener'] else self.get_param_values('fixener', m['nH'])
+
+        # variables
+        m['pe'] = m['model'].addVars(m['H'], name=f'pe_{self.name}', lb=float('-inf'))
+        m['p'] = m['model'].addVars(list(range(self.n_product)), name=f'p_{self.name}', lb=float('-inf')) # products
+
+        return
+    
+
+    def add_asset_constraints(self, m: dict):
+
+        m['model'].addConstrs((m['pe'][h] >= 0 for h in m['H']), name=f'cons10u_{self.name}')
+        m['model'].addConstrs((m['pe'][h] <= m['consumption'][h] for h in m['H']), name=f'cons10l_{self.name}')
+        if m['fixener'] is not None:
+            m['model'].addConstrs((m['pe'][h] == m['fixener'][h] for h in m['H']), name=f'cons6_{self.name}')
+
+        # return product package 'p'
+        m['model'].addConstrs((m['p'][h] == m['pe'][h] for h in m['H']), name=f'cons3_{self.name}')
+        m['model'].addConstrs((m['p'][h + m['nH']] == 0 for h in m['H']), name=f'cons4_{self.name}')
+
+        return
+
+
+    def get_value_obj_expr(self, m: dict):
+        return gp.quicksum(m['alphae'][h] * m['pe'][h] * m['pe'][h] + m['oppcprice'][h] * m['pe'][h] for h in m['H'])
+
+
+class ProsumerRenewableFlex(Prosumer):
+
+    def add_asset_params_vars(self, m: dict):
+        assert self.n_product % 2 == 0, "The number of products must be even for ProsumerRenewableFlex."
+        m['nH'] = int(self.n_product/2)
+
+        #sets
+        m['H'] = list(range(m['nH']))
+
+        # preference parameters
+        m['oppdprice'] = self.get_param_values('oppdprice', m['nH']) # (h)
+        m['generation'] = self.get_param_values('generation', m['nH'])
+        m['alphae'] = self.get_param_values('alphae', m['nH']) # (h)
+        m['fixener'] = None if not self.config['fixener'] else self.get_param_values('fixener', m['nH'])
+
+        # variables
+        m['pe'] = m['model'].addVars(m['H'], name=f'pe_{self.name}', lb=float('-inf')) # power for storage
+        m['p'] = m['model'].addVars(list(range(self.n_product)), name=f'p_{self.name}', lb=float('-inf')) # products
+
+        return
+    
+
+    def add_asset_constraints(self, m: dict):
+
+        m['model'].addConstrs((m['pe'][h] <= 0 for h in m['H']), name=f'cons10u_{self.name}')
+        m['model'].addConstrs((m['pe'][h] >= -m['generation'][h] for h in m['H']), name=f'cons10l_{self.name}')
+        if m['fixener'] is not None:
+            m['model'].addConstrs((m['pe'][h] == m['fixener'][h] for h in m['H']), name=f'cons6_{self.name}')
+
+        # return product package 'p'
+        m['model'].addConstrs((m['p'][h] == m['pe'][h] for h in m['H']), name=f'cons3_{self.name}')
+        m['model'].addConstrs((m['p'][h + m['nH']] == 0 for h in m['H']), name=f'cons4_{self.name}')
+        return
+
+
+    def get_value_obj_expr(self, m: dict):
+        return gp.quicksum(m['alphae'][h] * m['pe'][h] * m['pe'][h] + m['oppdprice'][h] * m['pe'][h] for h in m['H'])
+
+
+# outdated
 class LogarithmicBidder(Bidder):
     def __init__(self, name: str, horizon: int, config: dict):
         self.name = name

@@ -6,10 +6,11 @@ from line_profiler import profile
 from codetiming import Timer
 import concurrent.futures
 import logging
+import gurobipy as gp
 
 #own libs
 from value_function_est import ValueFunctionEstimateDQ
-from utils import mvnn_params, mip_params, next_price_params, cce_params, mlcce_params
+from utils import mvnn_params, mip_params, next_price_params, cce_params, mlcce_params, log_mech_metrics
 
 logger = logging.getLogger("wandb")
 logger.setLevel(logging.ERROR)
@@ -45,20 +46,23 @@ class MLCCE:
         self.next_price_timer = Timer('next_price_timer', logger=None)
         
         # value estimators initialized
-        self.value_estimators = [ValueFunctionEstimateDQ(capacity_generic_goods=self.capacities[i],
-                                                         mvnn_params=mvnn_params[bidders[i].__class__.__name__],
-                                                         mip_params=mip_params,
-                                                         price_scale=np.max(np.abs(price_bound)) # TODO: see if this works as expected
-                                                        ) for i in range(self.num_participants)]
+        self.value_estimators = []
+        for i in range(self.num_participants):
+            mvnn_param = mvnn_params[bidders[i].__class__.__name__] if bidders[i].__class__.__name__ in mvnn_params.keys() else mvnn_params['ProsumerStorage']
+            self.value_estimators.append(ValueFunctionEstimateDQ(capacity_generic_goods=self.capacities[i],
+                                                                 mvnn_params=mvnn_param,
+                                                                 mip_params=mip_params,
+                                                                 price_scale=np.max(np.abs(price_bound)) # TODO: see if this works as expected
+                                                                ))
 
-
+    @profile
     def __next_price_grad(self, decvar: np.ndarray):
         price = decvar[:-1]
         predicted_bundles = [value_estimator.get_max_util_bundle(price) for value_estimator in self.value_estimators]
         grad = np.append(-np.sum(predicted_bundles, axis=0) + 2*self.next_price_params['prox_coef']*(price - self.price_iterates[-1]), 0)
         return grad
     
-
+    @profile
     def __next_price_objective(self, decvar: np.ndarray):
         price = decvar[:-1]
         predicted_bundles = [value_estimator.get_max_util_bundle(price) for value_estimator in self.value_estimators]
@@ -66,41 +70,32 @@ class MLCCE:
         payments = np.array([np.dot(price, bundle) for bundle in predicted_bundles])
         return np.sum(predicted_values - payments) + self.next_price_params['prox_coef'] * np.linalg.norm(price - self.price_iterates[-1], 2)**2
 
-
+    @profile
     def __next_price(self, ):
         initial_price = self.price_iterates[-1]
         step_bound = [self.cce_params['base_step'] / (self.mlcce_iter+1), self.cce_params['base_step'] / np.pow(self.mlcce_iter+1, 0.5)]
-        bounds=[(self.price_bound[0][i], self.price_bound[1][i]) for i in range(self.n_products)].append((step_bound[0], step_bound[1]))
+        bounds=[(self.price_bound[0][i], self.price_bound[1][i]) for i in range(self.n_products)]
+        bounds.append((step_bound[0], step_bound[1]))
+        slsqp_constraint = {'type': 'eq',
+                            'fun': lambda x: x[:-1] - self.current_imb * x[-1] - initial_price,
+                            'jac': lambda x: np.append(np.eye(self.n_products), -self.current_imb.reshape(-1, 1), 1)}
+        trust_constr_constraint = opt.LinearConstraint(np.append(np.eye(self.n_products), -self.current_imb.reshape(-1, 1), 1), 
+                                                                  lb=initial_price,
+                                                                  ub=initial_price)
         solution = opt.minimize(self.__next_price_objective,
-                                np.append(initial_price, self.cce_params['base_step'] / (self.mlcce_iter+1)),
+                                np.append(initial_price, step_bound[0]/2 + step_bound[1]/2),
                                 jac=self.__next_price_grad,
                                 bounds=bounds,
-                                constraints=[opt.LinearConstraint(np.append(np.eye(self.n_products), -self.current_imb.reshape(-1, 1), 1), 
-                                                                  lb=initial_price,
-                                                                  ub=initial_price)],
+                                constraints=[slsqp_constraint] if self.next_price_params['method'] == 'SLSQP' else [trust_constr_constraint],
                                 method=self.next_price_params['method'])
 
         pred_imb = -self.__next_price_grad(solution.x)[:-1]
         print(f'Predicted imbalance: {np.round(pred_imb, 2)}')
+        print(f'Step: {solution.x[-1]:.2f}, bounds: {step_bound[0]:.2f} - {step_bound[1]:.2f}')
+        # print(f'Change in prices: {solution.x[:-1] - initial_price}')
+        print(f'Solution status: {solution.success}: {solution.message}')
         
-        return solution.x[:-1]
-
-
-    def __log_price(self, price, step):
-        [self.wandb_run.log({f"Price/Product {i}": price[i]}, step=step, commit=False) for i in range(self.n_products)] # log prices
-    
-    def __log_imbalance(self, bundle, step):
-        imb = np.sum(bundle, 0)
-        total_capacity = np.sum(self.capacities, 0)
-        rel_imb = np.where(imb >= 0, imb * 100 / total_capacity[1], imb * 100 / total_capacity[0])
-
-        imbalance_norm = np.linalg.norm(rel_imb, 1)
-        self.imbalance_norm.append(imbalance_norm)
-        [self.wandb_run.log({f"Imbalance/Product {i}": rel_imb[i]}, step=step, commit=False) for i in range(self.n_products)] # log imbalance
-        self.wandb_run.log({f"Imbalance_norm": imbalance_norm}, step=step, commit=False)
-    
-    def __log_Lagrange_dual(self, value, step):
-        self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
+        return solution.x[:-1], solution.x[-1]
 
 
     def run(self, ):
@@ -117,12 +112,10 @@ class MLCCE:
                 self.queried_values[-1].append(true_value)
                 self.Lagrange_dual[-1] += true_value - np.dot(self.price_iterates[i-1], bundle)
                 self.value_estimators[j].add_data_point(self.price_iterates[i-1], bundle, true_value)
-            self.__log_price(self.price_iterates[-1], step=i)
-            self.__log_imbalance(self.queried_bundles[-1], step=i)
-            self.__log_Lagrange_dual(self.Lagrange_dual[-1], step=i)
-            # self.wandb_run.log({}) # Commit
+            log_mech_metrics(self, self.price_iterates[-1], self.queried_bundles[-1], self.Lagrange_dual[-1], step=i)
 
             step = self.cce_params['base_step'] / (np.pow(i, self.cce_params['decay']))
+            self.wandb_run.log({"Gradient step size": step}, step=i, commit=False)
             self.price_iterates.append(self.price_iterates[i-1] + np.sum(self.queried_bundles[-1], 0) * step)
 
 
@@ -137,9 +130,7 @@ class MLCCE:
                 self.queried_bundles[-1].append(bundle)
                 self.queried_values[-1].append(true_value)
                 self.Lagrange_dual[-1] += true_value - np.dot(self.price_iterates[-1], bundle)
-            self.__log_price(self.price_iterates[-1], step=self.n_init_prices + self.mlcce_iter)
-            self.__log_imbalance(self.queried_bundles[-1], step=self.n_init_prices + self.mlcce_iter)
-            self.__log_Lagrange_dual(self.Lagrange_dual[-1], step=self.n_init_prices + self.mlcce_iter)
+            log_mech_metrics(self, self.price_iterates[-1], self.queried_bundles[-1], self.Lagrange_dual[-1], step=self.n_init_prices + self.mlcce_iter)
 
 
             # Print information
@@ -166,7 +157,8 @@ class MLCCE:
 
             # Update prices
             with self.next_price_timer:
-                price = np.clip(self.__next_price(), self.price_bound[0], self.price_bound[1])
+                price, step = self.__next_price()
+                price = np.clip(price, self.price_bound[0], self.price_bound[1])
                 self.price_iterates.append(price)
                 self.mlcce_iter += 1
 
@@ -177,6 +169,7 @@ class MLCCE:
             if self.n_products == 2:
                 [estimator.plot_nn(bidder, self.n_init_prices+self.mlcce_iter, id=i, wandb_run=self.wandb_run) for i, (bidder, estimator) in enumerate(zip(self.bidders, self.value_estimators))]
             self.wandb_run.log({"MLCCE Next price time": self.next_price_timer.timers.total('next_price_timer')}, step=self.n_init_prices+self.mlcce_iter, commit=False)
+            self.wandb_run.log({"Gradient step size": step}, step=self.n_init_prices+self.mlcce_iter, commit=False)
         
         # Post-processing
         best_iter = np.argmin(self.imbalance_norm)
@@ -185,20 +178,6 @@ class MLCCE:
         
         
         return clearing_price, dispatch
-
-
-def log_mech_metrics(self, price, bundle, value, step):
-    [self.wandb_run.log({f"Price/Product {i}": price[i]}, step=step, commit=False) for i in range(len(price))] # log prices
-
-    imb = np.sum(bundle, 0)
-    total_capacity = np.sum(self.capacities, 0)
-    rel_imb = np.where(imb >= 0, imb * 100 / total_capacity[1], imb * 100 / total_capacity[0])
-    imbalance_norm = np.linalg.norm(rel_imb, 1)
-    self.imbalance_norm.append(imbalance_norm)
-    [self.wandb_run.log({f"Imbalance/Product {i}": rel_imb[i]}, step=step, commit=False) for i in range(self.n_products)] # log imbalance
-    self.wandb_run.log({f"Imbalance_norm": imbalance_norm}, step=step, commit=False)
-
-    self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
 
 
 class CCE:
@@ -220,23 +199,6 @@ class CCE:
         self.cce_iter = 0
 
 
-    def __log_price(self, price, step):
-        [self.wandb_run.log({f"Price/Product {i}": price[i]}, step=step, commit=False) for i in range(self.n_products)] # log prices
-    
-    def __log_imbalance(self, bundle, step):
-        imb = np.sum(bundle, 0)
-        total_capacity = np.sum(self.capacities, 0)
-        rel_imb = np.where(imb >= 0, imb * 100 / total_capacity[1], imb * 100 / total_capacity[0])
-
-        imbalance_norm = np.linalg.norm(rel_imb, 1)
-        self.imbalance_norm.append(imbalance_norm)
-        [self.wandb_run.log({f"Imbalance/Product {i}": rel_imb[i]}, step=step, commit=False) for i in range(self.n_products)] # log imbalance
-        self.wandb_run.log({f"Imbalance_norm": imbalance_norm}, step=step, commit=False)
-    
-    def __log_Lagrange_dual(self, value, step):
-        self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
-
-
     def run(self, ):
         self.price_iterates.append(self.price_bound[0]*0.8 + self.price_bound[1]*0.2) # Initial prices
         
@@ -251,16 +213,14 @@ class CCE:
                 gradient -= bundle
             
             self.cce_iter += 1 # increment iteration
-            self.__log_price(self.price_iterates[-1], step=self.cce_iter)
-            self.__log_imbalance(self.queried_bundles[-1], step=self.cce_iter)
-            self.__log_Lagrange_dual(self.Lagrange_dual[-1], step=self.cce_iter)
-            self.wandb_run.log({}) # Commit
+            log_mech_metrics(self, self.price_iterates[-1], self.queried_bundles[-1], self.Lagrange_dual[-1], step=self.cce_iter)
             
             if self.cce_iter >= self.cce_params['max_iter']:
                 break
 
             step = self.cce_params['base_step'] / np.pow(len(self.price_iterates), self.cce_params['decay'])
             self.price_iterates.append(self.price_iterates[-1] - step * gradient)
+            self.wandb_run.log({"Gradient step size": step}, step=self.cce_iter, commit=False)
         
         # Post-processing
         best_iter = np.argmin(self.imbalance_norm)
@@ -332,4 +292,34 @@ class CHP_fullinfo:
         #     self.wandb_run.log({f"CHP_dispatch": wandb.Image(fig)}, commit=False)
         
         return solution.x, dispatch
-    
+
+
+class FullInfo:
+    def __init__(self, bidders: list, n_products: int, wandb_run):
+        self.bidders = bidders
+        self.wandb_run = wandb_run
+
+        # Params
+        self.n_products = n_products
+
+        self.model = gp.Model("FullInfo", env=gp.Env(params={'LogToConsole': 0, 'OutputFlag': 0}))
+
+    def run(self, ):
+        dispatch_vars = []
+        obj = 0
+        for bidder in self.bidders:
+            dispatch_var, obj_expr = bidder.add_model(self.model)
+            dispatch_vars.append(dispatch_var)
+            obj += obj_expr
+        self.model.setObjective(obj, gp.GRB.MAXIMIZE)
+        self.model.addConstrs((gp.quicksum(dispatch_vars[i][j] for i in range(len(self.bidders))) == 0 for j in range(self.n_products)), name="Trade balance")
+        self.model.optimize()
+
+        if self.model.status == gp.GRB.OPTIMAL:
+            dispatch = [[dispatch_var[n].x for n in range(self.n_products)] for dispatch_var in dispatch_vars]
+            primal_obj = self.model.ObjVal
+        
+        print(f'FullInfo objective: {primal_obj:.2f}')
+        self.wandb_run.log({"Primal_obj": primal_obj})
+        
+        return None, dispatch

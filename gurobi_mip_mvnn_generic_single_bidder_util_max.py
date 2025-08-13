@@ -4,8 +4,7 @@ from timeit import default_timer as timer
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-import io
-import contextlib
+from line_profiler import profile
 
 from utils import gurobi_status_converter
 
@@ -43,6 +42,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
         self.gpenv = gp.Env(params={'LogToConsole': 0 if not self.solve_verbose else 1,
                                     'OutputFlag': 0 if not self.solve_verbose else 1})
+
 
     def __calc_preactivated_box_bounds(self,
                                      verbose = False):
@@ -99,7 +99,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # Bounded ReLU (bReLU) activation function for MVNNS with cutoff t
         return np.minimum(t, np.maximum(0, x)).reshape(-1, 1)
 
-
+    @profile
     def __generate_mip(self, ):
 
         self.y_variables = []  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0

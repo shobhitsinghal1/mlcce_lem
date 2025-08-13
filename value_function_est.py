@@ -22,7 +22,7 @@ PYTHONWARNINGS = 'error'
 
 class ValueFunctionEstimateDQ():
     
-    def __init__(self, capacity_generic_goods: list[np.ndarray], mvnn_params: dict, mip_params: dict, price_scale: float = 200):
+    def __init__(self, capacity_generic_goods: list[np.ndarray], mvnn_params: dict, mip_params: dict, price_scale: float):
         self.trained_model = None # supposed to point to the last trained model
         self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX(mip_params=mip_params)
         self.price_scale = price_scale
@@ -73,9 +73,9 @@ class ValueFunctionEstimateDQ():
                     continue
 
                 # get the predicted value for that answer
-                predicted_value = model(torch.from_numpy(predicted_demand).float())
+                predicted_value = model(torch.from_numpy(predicted_demand).float().to(device))
 
-                predicted_utility = predicted_value - torch.dot(price_vector, torch.from_numpy(predicted_demand).to(device).float())
+                predicted_utility = predicted_value - torch.dot(price_vector, torch.from_numpy(predicted_demand).float().to(device))
 
                 # get the predicted utility for the actual demand vector
                 predicted_value_at_true_demand = model(demand_vector)
@@ -90,8 +90,8 @@ class ValueFunctionEstimateDQ():
 
                 loss += torch.relu(predicted_utility_difference)   # for numerical stability
 
-                loss_dq_list.append(predicted_utility_difference.detach().numpy()[0])
-                dq_pred_error_list.append(np.linalg.norm(predicted_demand - demand_vector.numpy(), ord = 2))
+                loss_dq_list.append(predicted_utility_difference.detach().cpu().numpy()[0])
+                dq_pred_error_list.append(np.linalg.norm(predicted_demand - demand_vector.cpu().numpy(), ord = 2))
             
             
             loss = loss / len(price_vectors)
@@ -119,10 +119,11 @@ class ValueFunctionEstimateDQ():
                 for demand_vector, price_vector, true_value in val_loader:
                     demand_vector = demand_vector.to(device)
                     scaled_value_prediction = trained_model(demand_vector)
-                    scaled_value_preds_val.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-                    true_values_val.extend(list(true_value.numpy()))
-                    demand_vectors_val.extend(list(demand_vector.cpu().numpy()))
-                    price_vectors_val.extend(list(price_vector.numpy()))
+                    
+                    scaled_value_preds_val.extend(scaled_value_prediction.detach().cpu().numpy())
+                    true_values_val.extend(true_value.numpy())
+                    demand_vectors_val.extend(demand_vector.cpu().numpy())
+                    price_vectors_val.extend(price_vector.numpy())
         
                 scaled_value_preds_val = np.array(scaled_value_preds_val)
                 value_preds_val = scaled_value_preds_val * self.price_scale
@@ -139,8 +140,9 @@ class ValueFunctionEstimateDQ():
             for demand_vector, price_vector, true_value in train_loader:
                 demand_vector = demand_vector.to(device)
                 scaled_value_prediction = trained_model(demand_vector)
-                scaled_value_preds_train.extend(scaled_value_prediction.cpu().numpy().flatten().tolist())
-                true_values_train.extend(list(true_value.numpy()))
+
+                scaled_value_preds_train.extend(scaled_value_prediction.detach().cpu().numpy())
+                true_values_train.extend(true_value.numpy())
                 demand_vectors_train.extend(demand_vector.cpu().numpy())
                 price_vectors_train.extend(price_vector.numpy())
             
@@ -189,8 +191,8 @@ class ValueFunctionEstimateDQ():
                 predicted_demands.append(predicted_demand)
 
                 with torch.no_grad():
-                    predicted_value = trained_model(torch.from_numpy(predicted_demand).float()).item()
-                predicted_utility = predicted_value - np.dot(price_vector, predicted_demand)
+                    predicted_value = trained_model(torch.from_numpy(predicted_demand).float().to(device))
+                predicted_utility = predicted_value.detach().cpu().numpy()[0] - np.dot(price_vector, predicted_demand)
 
                 predicted_value_at_true_demand = scaled_value_preds_val[j]
                 predicted_utility_at_true_demand = predicted_value_at_true_demand - np.dot(price_vector, demand_vectors_val[j])
@@ -331,17 +333,17 @@ class ValueFunctionEstimateDQ():
         best_val_loss = np.inf
         patience = 0
         for epoch in range(epochs):
-            train_loss_dq, dq_pred_error = self.__dq_train_mvnn_helper(model,
+            train_loss_dq, dq_pred_error = self.__dq_train_mvnn_helper(model.to(torch.device(self.mvnn_params['device'])),
                                                         optimizer,
                                                         train_loader_demand_queries,
-                                                        device=torch.device('cpu')
+                                                        device=torch.device(self.mvnn_params['device'])
                                                         )
             
             # if val_loader_demand_queries is not None:
-            val_metrics = self.__dq_val_mvnn(trained_model = model,
+            val_metrics = self.__dq_val_mvnn(trained_model = model.to(torch.device(self.mvnn_params['device'])),
                                              val_loader = val_loader_demand_queries,
                                              train_loader = train_loader_demand_queries,
-                                             device=torch.device('cpu'))
+                                             device=torch.device(self.mvnn_params['device']))
             metrics.append(val_metrics)
             metrics[-1]["train_dq_loss_scaled"] = train_loss_dq
             metrics[-1]["dq_pred_error"] = dq_pred_error
@@ -381,7 +383,7 @@ class ValueFunctionEstimateDQ():
         """
         Query the utility maximizing bundle using the learned value function and for given price.
         """
-        scaled_price = price / self.price_scale
+        scaled_price = price / self.price_scale # value function is trained on scaled prices
         if self.trained_model is None:
             raise ValueError("Model not trained yet.")
         self.max_util_mvnn_model.update_model(self.trained_model)
