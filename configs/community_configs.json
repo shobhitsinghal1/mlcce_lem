@@ -15,32 +15,48 @@
         "imbalance_tol_coef": 0.01,
         "n_products": 6
     },
+    "random6_10": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [2, 2, 2, 2, 2],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 6
+    },
     "random6_20": {
-        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer"],
-        "N": [5, 5, 5, 5],
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [4, 4, 4, 4, 4],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 6
+    },
+    "random6_40": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [8, 8, 8, 8, 8],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 6
+    },
+    "random6_80": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [16, 16, 16, 16, 16],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 6
+    },
+    "random6_120": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [24, 24, 24, 24, 24],
         "price_max": 80,
         "price_min": 0,
         "imbalance_tol_coef": 0.01,
         "n_products": 6
     },
     "enerflextoy2": {
-        "bidder_types": ["StorageEnerFlex", "DSO", "ConsumerFlex", "WindFlex"],
-        "N": [2, 2, 1, 1],
-        "price_max": 80,
-        "price_min": 0,
-        "imbalance_tol_coef": 0.01,
-        "n_products": 4
-    },
-    "enerflextoy2_e": {
-        "bidder_types": ["StorageEnerFlex", "DSO", "ConsumerFlex", "WindFlex"],
-        "N": [2, 2, 1, 1],
-        "price_max": 80,
-        "price_min": 0,
-        "imbalance_tol_coef": 0.01,
-        "n_products": 4
-    },
-    "enerflextoy2_f": {
-        "bidder_types": ["StorageEnerFlex", "DSO", "ConsumerFlex", "WindFlex"],
+        "bidder_types": ["StorageFlex", "DSO", "ConsumerFlex", "RenewableFlex"],
         "N": [2, 2, 1, 1],
         "price_max": 80,
         "price_min": 0,

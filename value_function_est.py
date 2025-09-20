@@ -23,7 +23,7 @@ PYTHONWARNINGS = 'error'
 class ValueFunctionEstimateDQ():
     
     def __init__(self, capacity_generic_goods: list[np.ndarray], mvnn_params: dict, mip_params: dict, price_scale: float):
-        self.trained_model = None # supposed to point to the last trained model
+        self.trained_model = None # points to the last trained model
         self.max_util_mvnn_model = GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX(mip_params=mip_params)
         self.price_scale = price_scale
         
@@ -106,6 +106,8 @@ class ValueFunctionEstimateDQ():
 
 
     def __dq_val_mvnn(self, trained_model, val_loader, train_loader, device):
+        """
+        Validate the MVNN model using the demand query data and return validation metrics."""
         trained_model.eval()
         metrics = {}
 
@@ -206,27 +208,6 @@ class ValueFunctionEstimateDQ():
             metrics['val_dq_loss_scaled'] = val_dq_loss / len(price_vectors_val)
         # --------------------------------------
 
-
-        # 3. Regret performance measure 
-        # --------------------------------------
-        # regret = 0
-        # for (j, price_vector) in enumerate(price_vectors):
-        #     # calculate the optimal true utility for the true demand vector
-        #     scaled_true_value =  scaled_true_values[j]
-        #     scaled_true_opt_utility = scaled_true_value - np.dot(price_vector, demand_vectors[j])
-
-        #     # calculate the true utility for the predicted demand vector
-        #     predicted_demand = predicted_demands[j]
-        #     scaled_value_at_predicted_demand = bidder.calculate_value(predicted_demand) / scale
-        #     scaled_utility_at_predicted_demand = scaled_value_at_predicted_demand - np.dot(price_vector, predicted_demand)
-
-        #     regret = regret + (scaled_true_opt_utility - scaled_utility_at_predicted_demand)
-
-
-        # val_metrics['mean_regret'] = (regret * scale) / len(price_vectors)
-        # val_metrics['mean_regret_scaled'] = val_metrics['mean_regret'] / common_scale_generalazation # regret scaled by the common scale of the generalization set to make numbers interpretable
-        # --------------------------------------
-
         return metrics
 
 
@@ -253,8 +234,6 @@ class ValueFunctionEstimateDQ():
         self.dataset_bundle.append(bundle)
 
         values_lower_bound = [np.dot(self.dataset_bundle[i], self.dataset_price[i]) for i in range(len(self.dataset_bundle))]
-        # print(f'Max: {np.max(values_lower_bound)}')
-        # print(f'Mean: {np.mean(values_lower_bound)}')
         self.price_scale = np.mean(np.abs(values_lower_bound)) + 1e-5
         return
 
@@ -311,7 +290,7 @@ class ValueFunctionEstimateDQ():
                             init_little_const = self.mvnn_params['init_little_const'],
                             capacity_generic_goods=self.capacity_generic_goods
                             )
-        self.trained_model = model #update the trained model
+        self.trained_model = model # update the trained model
 
 
         # make sure ts have no regularisation (the bigger t the more regular)
@@ -339,7 +318,6 @@ class ValueFunctionEstimateDQ():
                                                         device=torch.device(self.mvnn_params['device'])
                                                         )
             
-            # if val_loader_demand_queries is not None:
             val_metrics = self.__dq_val_mvnn(trained_model = model.to(torch.device(self.mvnn_params['device'])),
                                              val_loader = val_loader_demand_queries,
                                              train_loader = train_loader_demand_queries,
@@ -392,6 +370,9 @@ class ValueFunctionEstimateDQ():
 
 
     def plot_nn(self, bidder: Bidder, step, id, wandb_run = None):
+        """
+        Plot the learned value function for 2D economy.
+        """
         assert len(self.capacity_generic_goods[0]) == 2, "Plotting is only supported for 2D"
 
         bounds = self.capacity_generic_goods
@@ -421,9 +402,9 @@ class ValueFunctionEstimateDQ():
 
 
 if __name__ == "__main__":
-    # unit test for value function estimator - fully substitute value function - 2 intervals
-
-    # run = wandb.init(project='mlcce', entity='shosi-danmarks-tekniske-universitet-dtu')
+    """
+    Use optuna to optimize hyperparameters for value function estimation
+    """
 
     nprices = 20
     price_scale = 100
@@ -480,15 +461,3 @@ if __name__ == "__main__":
     [print(trial.params) for trial in trials]
     [print(trial.values) for trial in trials]
     optuna.visualization.plot_param_importances(study).show(redered='browser')
-    # print("Accuracy: {}".format(trial.value))
-    # print("Best hyperparameters: {}".format(trial.params))
-
-
-    # data = [[v1, v2] for v1, v2 in zip(metrics[list(metrics.keys())[-1]]['predicted_values'], metrics[list(metrics.keys())[-1]]['true_values'])]
-    # loss_data = [[i+1, metrics[i]['train_dq_loss_scaled'], 'train_loss'] for i in range(len(metrics.keys()))]
-    # loss_data.extend([[i+1, metrics[i]['val_dq_loss_scaled'], 'val_loss'] for i in range(len(metrics.keys()))])
-    # table = wandb.Table(data=data, columns=["predicted_values", "true_values"])
-    # table_loss = wandb.Table(data=loss_data, columns=['step', 'loss_scaled', 'series'])
-    # run.log({'Prediction_plot': wandb.plot.scatter(table, "predicted_values", "true_values")})
-    # run.log({'Loss_plot': wandb.plot.line(table_loss, "step", "loss_scaled", "series")})
-    # print(f'Model trained with metrics: {metrics[list(metrics.keys())[-1]]}')

@@ -1,5 +1,6 @@
 import numpy as np
 import json
+import os
 
 mip_params = {
     'timeLimit': np.inf,
@@ -11,7 +12,7 @@ mip_params = {
 }
 
 next_price_params = {
-    'method': 'COBYQA',
+    'method': 'SLSQP',
     'prox_coef': 0,
 }
 
@@ -25,7 +26,6 @@ mlcce_params = {
     'cce_rounds': 5,
     'max_iter': 40
 }
-
 
 
 mvnn_params = {
@@ -140,7 +140,6 @@ mvnn_params_hpopt = {
     'stopping_condition': ['categorical', {'choices': ['train_loss', 'val_loss', 'early_stop']}],
 }
 
-# asset_configs = json.load(open('configs/asset_configs.json'))
 community_configs = json.load(open('configs/community_configs.json'))
 
 def gurobi_status_converter(int_status):
@@ -162,9 +161,136 @@ def log_mech_metrics(self, price, bundle, value, step):
     self.wandb_run.log({"Lagrange_dual": value}, step=step, commit=False)
 
 
-def make_bidder_configs(community):
+# --------------------- Generate bidder configurations ---------------------
+def make_HeatPump(j, n_products, avg_price, spread_limit):
+    config = {}
+    config['type'] = 'ProsumerStorage'
+    name = f'HeatPump{j}'
+    capacity = np.random.uniform(5, 50)
+    config['s0'] = np.random.uniform(0, capacity)
+    config['sn'] = capacity/2
+    config['alpha'] = np.random.uniform(0.1, 0.2)
+    config['eta'] = np.random.uniform(0.5, 0.7)
+    config['power_limit_up'] = np.random.uniform(capacity/5, capacity)
+    config['power_limit_down'] = 0
+    config['su'] = [capacity]*n_products
+    config['sl'] = [0]*n_products
+    config['gamma'] = [np.random.uniform(capacity/20, capacity/10)]*n_products
+    config['available'] = [1]*n_products
+    config['oppcprice'] = np.random.normal(avg_price, spread_limit/3, n_products)
+    config['oppdprice'] = list(np.random.uniform(config['oppcprice'] - spread_limit/10, config['oppcprice']))
+    config['oppcprice'] = list(config['oppcprice'])
+    config['beta'] = [0]*n_products
+    return config, name
+
+def make_HomeStorage(j, n_products, avg_price, spread_limit):
+    config = {}
+    config['type'] = 'ProsumerStorage'
+    name = f'HomeStorage{j}'
+    capacity = np.random.uniform(5, 50)
+    config['s0'] = np.random.uniform(0, capacity)
+    config['sn'] = capacity/2
+    config['alpha'] = np.random.uniform(0.1, 0.2)
+    config['eta'] = np.random.uniform(0.85, 0.95)
+    config['power_limit_up'] = np.random.uniform(capacity/5, capacity)
+    config['power_limit_down'] = -config['power_limit_up']
+    config['su'] = [capacity]*n_products
+    config['sl'] = [0]*n_products
+    config['gamma'] = [0]*n_products
+    config['available'] = [1]*n_products
+    config['oppcprice'] = np.random.normal(avg_price, spread_limit/3, n_products)
+    config['oppdprice'] = list(np.random.uniform(config['oppcprice'] - spread_limit/10, config['oppcprice']))
+    config['oppcprice'] = list(config['oppcprice'])
+    config['beta'] = [np.random.uniform(0,0.4)]*n_products
+    return config, name
+
+def make_Wind(j, n_products, avg_price, spread_limit):
+    config = {}
+    config['type'] = 'ProsumerRenewable'
+    name = f'Wind{j}'
+    capacity = np.random.uniform(5, 50)
+    config['generation'] = list(np.random.uniform(0, capacity, n_products))
+    config['oppdprice'] = list(np.random.normal(avg_price*0.4, spread_limit/3, n_products))
+    return config, name
+
+def make_Consumer(j, n_products, avg_price, spread_limit):
+    config = {}
+    config['type'] = 'ProsumerConsumer'
+    name = f'Consumer{j}'
+    capacity = np.random.uniform(5, 50)
+    config['consumption'] = list(np.random.uniform(0, capacity, n_products))
+    config['oppcprice'] = list(np.random.normal(avg_price*0.6, spread_limit/3, n_products))
+    return config, name
+
+def make_Switch(j, n_products, avg_price, spread_limit):
+    config = {}
+    config['type'] = 'ProsumerSwitch'
+    name = f'Switch{j}'
+    config['capacity'] = np.random.uniform(5, 15)
+    config['oppcprice'] = list(np.random.normal(avg_price*0.6, spread_limit/3, n_products))
+    config['tr'] = int(np.random.randint(1, int(n_products/2) + 1))
+    config['tl'] = int(np.random.randint(1, n_products - config['tr'] + 2))
+    config['tu'] = int(np.random.randint(config['tl'] + config['tr'] - 1, n_products + 1))
+    return config, name
+
+def make_StorageFlex(j, n_products, avg_price, spread_limit):
+    config = {}
+    assert n_products % 2 == 0
+    nH = int(n_products / 2)
+    config['type'] = 'ProsumerStorageFlex'
+    name = f'StorageFlex{j}'
+    config['oppeprice'] = list(np.random.normal(avg_price*1.25, spread_limit/20, nH))
+    config['oppfprice'] = list(np.random.normal(avg_price*0.625, spread_limit/20, nH))
+    config['alphae'] = list(np.random.uniform(-0.3, -0.1, nH))
+    config['alphaf'] = list(np.random.uniform(-0.3, -0.1, nH))
+    config['su'] = np.random.uniform(5, 50)
+    config['s0'] = np.random.uniform(0, config['su'])
+    config['fixflex'] = False
+    config['fixener'] = False
+    return config, name
+
+def make_DSO(j, n_products, avg_price, spread_limit):
+    config = {}
+    nH = int(n_products / 2)
+    config['type'] = 'ProsumerDSO'
+    name = f'DSO{j}'
+    config['oppfprice'] = list(np.random.normal(avg_price, spread_limit/20, nH))
+    config['alphaf'] = list(np.random.uniform(-0.5, -1, nH))
+    config['flexlimit'] = list(np.random.uniform(5, 20, nH))
+    config['fixflex'] = False
+    config['fixener'] = False
+    return config, name
+
+def make_ConsumerFlex(j, n_products, avg_price, spread_limit):
+    config = {}
+    nH = int(n_products / 2)
+    config['type'] = 'ProsumerConsumerFlex'
+    name = f'ConsumerFlex{j}'
+    config['oppcprice'] = list(np.random.normal(avg_price*1.25, spread_limit/20, nH))
+    config['alphae'] = list(np.random.uniform(-0.3, -0.1, nH))
+    config['consumption'] = list(np.random.uniform(5, 50, nH))
+    config['fixener'] = False
+    return config, name
+
+def make_RenewableFlex(j, n_products, avg_price, spread_limit):
+    config = {}
+    nH = int(n_products / 2)
+    config['type'] = 'ProsumerRenewableFlex'
+    name = f'RenewableFlex{j}'
+    config['oppdprice'] = list(np.random.normal(avg_price, spread_limit/20, nH))
+    config['alphae'] = list(np.random.uniform(-0.3, -0.1, nH))
+    config['generation'] = list(np.random.uniform(5, 50, nH))
+    config['fixener'] = False
+    return config, name
+
+
+def make_bidder_configs(community, seed):
+    """
+    Generate bidder configurations for a given community and random number generator seed.
+    """
+    np.random.seed(seed)
     community_config = community_configs[community]
-    horizon = community_config["horizon"]
+    n_products = community_config["n_products"]
 
     avg_price = (community_config["price_max"] + community_config["price_min"]) / 2
     spread_limit = community_config["price_max"] - community_config["price_min"]
@@ -172,84 +298,16 @@ def make_bidder_configs(community):
     for i, n in enumerate(community_config["N"]):
         bidder_type = community_config["bidder_types"][i]
         for j in range(n):
-            config = {}
-            if bidder_type == 'HeatPump':
-                config['type'] = 'ProsumerStorage'
-                name = f'HeatPump{j}'
-                capacity = np.random.uniform(5, 50)
-                config['s0'] = np.random.uniform(0, capacity)
-                config['sn'] = capacity/2
-                config['alpha'] = np.random.uniform(1, 2)
-                config['eta'] = np.random.uniform(0.5, 0.7)
-                config['power_limit_up'] = np.random.uniform(capacity/5, capacity)
-                config['power_limit_down'] = 0
-                config['su'] = [capacity]*horizon
-                config['sl'] = [0]*horizon
-                config['gamma'] = [np.random.uniform(capacity/20, capacity/10)]*horizon
-                config['available'] = [1]*horizon
-                config['oppcprice'] = np.random.normal(avg_price, spread_limit/3, horizon)
-                config['oppdprice'] = list(np.random.uniform(config['oppcprice'] - spread_limit/10, config['oppcprice']))
-                config['oppcprice'] = list(config['oppcprice'])
-                config['beta'] = [0]*horizon
-            elif bidder_type == 'HomeStorage':
-                config['type'] = 'ProsumerStorage'
-                name = f'HomeStorage{j}'
-                capacity = np.random.uniform(5, 50)
-                config['s0'] = np.random.uniform(0, capacity)
-                config['sn'] = capacity/2
-                config['alpha'] = np.random.uniform(1, 2)
-                config['eta'] = np.random.uniform(0.85, 0.95)
-                config['power_limit_up'] = np.random.uniform(capacity/5, capacity)
-                config['power_limit_down'] = -config['power_limit_up']
-                config['su'] = [capacity]*horizon
-                config['sl'] = [0]*horizon
-                config['gamma'] = [0]*horizon
-                config['available'] = [1]*horizon
-                config['oppcprice'] = np.random.normal(avg_price, spread_limit/3, horizon)
-                config['oppdprice'] = list(np.random.uniform(config['oppcprice'] - spread_limit/10, config['oppcprice']))
-                config['oppcprice'] = list(config['oppcprice'])
-                config['beta'] = [np.random.uniform(0,0.4)]*horizon
-            # elif bidder_type == 'EV': # need to make sure the feasibility of the EV availability and gamma profile
-            #     config['type'] = 'ProsumerStorage'
-            #     name = f'EV{j}'
-            #     capacity = np.random.uniform(5, 50)
-            #     config['s0'] = np.random.uniform(0, capacity)
-            #     config['sn'] = capacity*0.7
-            #     config['alpha'] = np.random.uniform(2,8)
-            #     config['eta'] = np.random.uniform(0.85, 0.95)
-            #     config['power_limit_up'] = np.random.uniform(capacity/5, capacity)
-            #     config['power_limit_down'] = -config['power_limit_up']
-            #     config['su'] = [capacity]*horizon
-            #     config['sl'] = [0]*horizon
-            #     config['available'] = np.random.choice([0,1], horizon)
-            #     config['gamma'] = np.where(config['available'], 0, np.random.uniform(capacity/6, capacity/4, horizon))
-            #     config['oppcprice'] = np.random.normal(avg_price, spread_limit/3, horizon)
-            #     config['oppdprice'] = list(np.random.uniform(config['oppcprice'] - spread_limit/10, config['oppcprice']))
-            #     config['oppcprice'] = list(config['oppcprice'])
-            #     config['beta'] = [np.random.uniform(0.2,0.5)]*horizon
-            elif bidder_type == 'Wind':
-                config['type'] = 'ProsumerRenewable'
-                name = f'Wind{j}'
-                capacity = np.random.uniform(5, 50)
-                config['generation'] = list(np.random.uniform(0, capacity, horizon))
-                config['oppdprice'] = list(np.random.normal(avg_price*0.4, spread_limit/3, horizon))
-            elif bidder_type == 'Consumer':
-                config['type'] = 'ProsumerConsumer'
-                name = f'Consumer{j}'
-                capacity = np.random.uniform(5, 50)
-                config['consumption'] = list(np.random.uniform(0, capacity, horizon))
-                config['oppcprice'] = list(np.random.normal(avg_price*0.6, spread_limit/3, horizon))
-            elif bidder_type == 'Switch':
-                config['type'] = 'ProsumerSwitch'
-                name = f'Switch{j}'
-                config['capacity'] = np.random.uniform(5, 15)
-                config['oppcprice'] = list(np.random.normal(avg_price*0.6, spread_limit/3, horizon))
-                config['tr'] = int(np.random.randint(1, int(horizon/2) + 1))
-                config['tl'] = int(np.random.randint(1, horizon - config['tr'] + 2))
-                config['tu'] = int(np.random.randint(config['tl'] + config['tr'] - 1, horizon + 1))
+            config, name = eval(f'make_{bidder_type}({j}, {n_products}, {avg_price}, {spread_limit})')
             configs[name] = config
-    with open(f'configs/bidder_configs_{community}.json', 'w') as f:
+    
+    if not os.path.exists(f'configs/{community}'):
+        os.mkdir(f'configs/{community}')
+    with open(f'configs/{community}/{seed}.json', 'w') as f:
         json.dump(configs, f, indent=4)
 
 if __name__ == "__main__":
-    make_bidder_configs('random6_20')
+    for n in [10, 20, 40, 80, 120]:
+        community = f'random6_{n}'
+        for i in range(4):
+            make_bidder_configs(community, i)

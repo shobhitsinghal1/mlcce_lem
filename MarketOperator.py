@@ -10,10 +10,9 @@ import wandb
 
 
 class MarketOperator:
-    
-    def __init__(self, community: str, mechanism: str, seed: int = 0):
+    """ Class to manage the market clearing process for a community of bidders. """
+    def __init__(self, community: str, mechanism: str, seed: int):
         self.community = community
-        np.random.seed(seed)
 
         # Params
         self.community_config = community_configs[community]
@@ -28,7 +27,7 @@ class MarketOperator:
             price_min = self.community_config["price_min"]
 
         # WandB init
-        self.wandb_run = wandb.init(project='mlcce', 
+        self.wandb_run = wandb.init(project='mlcce',
                                     entity='shosi-danmarks-tekniske-universitet-dtu', 
                                     name=community + f"_{seed}_" + mechanism + datetime.datetime.fromtimestamp(time.time()).strftime("_%d_%H:%M"),
                                     config={"cce_params": cce_params,
@@ -36,11 +35,12 @@ class MarketOperator:
                                             "mvnn_params": mvnn_params,
                                             "community_config": self.community_config,
                                             "community_name": community,
-                                            "mechanism": mechanism},
-                                    mode='disabled')
+                                            "mechanism": mechanism,
+                                            "seed": seed},
+                                    mode='online')
 
         # Spawn bidders
-        with open(f'configs/bidder_configs_{self.community}.json', 'r') as f:
+        with open(f'configs/{community}/{seed}.json', 'r') as f:
             bidder_configs = json.load(f)
         self.bidders = [eval(bidder_configs[b]['type'])(b, self.n_products, bidder_configs[b]) for b in bidder_configs.keys()]
 
@@ -55,32 +55,35 @@ class MarketOperator:
                                  price_bound=(price_min, price_max),
                                  wandb_run=self.wandb_run)
         elif mechanism == 'CHP':
-            self.mechanism = CHP_fullinfo(self.bidders,
+            self.mechanism = CHP(self.bidders,
                                           price_bound=(price_min, price_max),
                                           wandb_run=self.wandb_run)
         elif mechanism == 'FullInfo':
             self.mechanism = FullInfo(self.bidders,
                                       n_products=self.n_products,
                                       wandb_run=self.wandb_run)
+        elif mechanism == 'FullInfoSequential':
+            self.mechanism = FullInfoSequential(self.bidders,
+                                                n_products=self.n_products,
+                                                wandb_run=self.wandb_run)
 
 
     def clear_market(self, ):
         clearing_price, dispatch = self.mechanism.run()
         if clearing_price is not None:
             self.wandb_run.log({f"clearing_price/Product {i}": clearing_price[i] for i in range(self.n_products)}, commit=False)
-        self.wandb_run.log({f"dispatch/Participant {j}/Product {i}": dispatch[j][i] for j in range(len(self.bidders)) for i in range(self.n_products)}, commit=False) 
+        self.wandb_run.log({f"dispatch/Participant {j}/Product {i}": dispatch[j][i] for j in range(len(self.bidders)) for i in range(self.n_products)}, commit=False)
 
         self.wandb_run.finish()
 
-        return None
-
 if __name__ == "__main__":
-    community = 'enerflextoy2'
-    # community_manager = MarketOperator(community, mechanism='FullInfo')
-    # community_manager.clear_market()
-    # community_manager = MarketOperator(community, mechanism='CHP')
-    # community_manager.clear_market()
-    # community_manager = MarketOperator(community, mechanism='CCE')
-    # community_manager.clear_market()
-    # community_manager = MarketOperator(community, mechanism='MLCCE')
-    # community_manager.clear_market()
+    for n in [40]:
+        community = f'random6_{n}'
+        print("\nN_products ", n)
+        for i in range(0,1):
+            print(f"\nSeed: {i}")
+            # community_manager = MarketOperator(community, mechanism='CCE', seed=i)
+            # community_manager.clear_market()
+            community_manager = MarketOperator(community, mechanism='MLCCE', seed=i)
+            community_manager.clear_market()
+            print('\n')

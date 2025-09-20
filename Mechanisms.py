@@ -56,50 +56,51 @@ class MLCCE:
                                                                 ))
 
     @profile
-    def __next_price_grad(self, decvar: np.ndarray):
-        price = decvar[:-1]
+    def __next_price_grad(self, decvar: np.ndarray, prev_imb: np.ndarray, prev_price: np.ndarray):
+        """
+        Gradient of the next price objective with respect to the decision variables.
+        """
+        price = decvar[0] * prev_imb + prev_price
         predicted_bundles = [value_estimator.get_max_util_bundle(price) for value_estimator in self.value_estimators]
-        grad = np.append(-np.sum(predicted_bundles, axis=0) + 2*self.next_price_params['prox_coef']*(price - self.price_iterates[-1]), 0)
-        return grad
+        grad = -np.sum(predicted_bundles, axis=0)
+
+        return np.dot(grad, prev_imb)
     
     @profile
-    def __next_price_objective(self, decvar: np.ndarray):
-        price = decvar[:-1]
+    def __next_price_objective(self, decvar: np.ndarray, prev_imb: np.ndarray, prev_price: np.ndarray):
+        """
+        Objective for the next price optimization problem.
+        """
+        price = decvar[0] * prev_imb + prev_price
         predicted_bundles = [value_estimator.get_max_util_bundle(price) for value_estimator in self.value_estimators]
         predicted_values = np.array([value_estimator.get_bundle_value(bundle) for value_estimator, bundle in zip(self.value_estimators, predicted_bundles)])
         payments = np.array([np.dot(price, bundle) for bundle in predicted_bundles])
-        return np.sum(predicted_values - payments) + self.next_price_params['prox_coef'] * np.linalg.norm(price - self.price_iterates[-1], 2)**2
+        return np.sum(predicted_values - payments)
 
     @profile
     def __next_price(self, ):
+        """
+        Solve the next price optimization problem.
+        """
         initial_price = self.price_iterates[-1]
-        step_bound = [self.cce_params['base_step'] / (self.mlcce_iter+1), self.cce_params['base_step'] / np.pow(self.mlcce_iter+1, 0.5)]
-        bounds=[(self.price_bound[0][i], self.price_bound[1][i]) for i in range(self.n_products)]
+        step_bound = [self.cce_params['base_step'] / (self.mlcce_iter+self.n_init_prices), self.cce_params['base_step'] / np.pow(self.mlcce_iter+self.n_init_prices, 0.5)]
+        bounds = []
         bounds.append((step_bound[0], step_bound[1]))
-        slsqp_constraint = {'type': 'eq',
-                            'fun': lambda x: x[:-1] - self.current_imb * x[-1] - initial_price,
-                            'jac': lambda x: np.append(np.eye(self.n_products), -self.current_imb.reshape(-1, 1), 1)}
-        trust_constr_constraint = opt.LinearConstraint(np.append(np.eye(self.n_products), -self.current_imb.reshape(-1, 1), 1), 
-                                                                  lb=initial_price,
-                                                                  ub=initial_price)
         solution = opt.minimize(self.__next_price_objective,
-                                np.append(initial_price, step_bound[0]/2 + step_bound[1]/2),
+                                [step_bound[0]/2 + step_bound[1]/2],
                                 jac=self.__next_price_grad,
+                                args = (self.current_imb, initial_price),
                                 bounds=bounds,
-                                constraints=[slsqp_constraint] if self.next_price_params['method'] == 'SLSQP' else [trust_constr_constraint],
                                 method=self.next_price_params['method'])
 
-        pred_imb = -self.__next_price_grad(solution.x)[:-1]
-        print(f'Predicted imbalance: {np.round(pred_imb, 2)}')
-        print(f'Step: {solution.x[-1]:.2f}, bounds: {step_bound[0]:.2f} - {step_bound[1]:.2f}')
-        # print(f'Change in prices: {solution.x[:-1] - initial_price}')
+        print(f'Step: {solution.x[0]:.2f}, bounds: {step_bound[0]:.2f} - {step_bound[1]:.2f}')
         print(f'Solution status: {solution.success}: {solution.message}')
         
-        return solution.x[:-1], solution.x[-1]
+        return solution.x[0]*self.current_imb+initial_price, solution.x[0]
 
 
     def run(self, ):
-        # CCE
+        # First few rounds of CCE
         self.price_iterates.append(self.price_bound[0]*0.8 + self.price_bound[1]*0.2) # initial prices
 
         for i in range(1, self.n_init_prices):
@@ -242,14 +243,15 @@ class CCE:
         return clearing_price, dispatch
 
 
-class CHP_fullinfo:
+class CHP:
+    """
+    Computes convex hull prices"""
     def __init__(self, bidders: list, price_bound: tuple, wandb_run):
         self.bidders = bidders
         self.wandb_run = wandb_run
 
         # Params
         self.capacities = [bidder.get_capacity_generic_goods() for bidder in self.bidders]
-        print(f'Capacities: {np.round(np.sum(self.capacities, 0), 0)}')
         self.n_products = len(self.capacities[0][0])
         self.price_bound = price_bound
 
@@ -276,26 +278,21 @@ class CHP_fullinfo:
         solution = opt.minimize(objective, initial_price, jac=gradient, bounds=bounds)
 
         imb = -gradient(solution.x)
-        print(f'CHP imbalance: {np.round(imb, 2)}')
-        print(f'CHP clearing price: {np.round(solution.x, 2)}')
-        print(f'CHP Lagrangian: {objective(solution.x):.2f}')
+        print(f'imbalance: {np.round(imb, 2)}')
+        print(f'clearing price: {np.round(solution.x, 2)}')
+        print(f'Lagrange dual: {objective(solution.x):.2f}')
         dispatch = [bidder.bundle_query(solution.x)[0] for bidder in self.bidders]
         
         log_mech_metrics(self, price=solution.x, bundle=dispatch, value=objective(solution.x), step=1)
-
-
-        # fig, ax = plt.subplots()
-        # [ax.plot(np.arange(1, self.n_products+1, 1), dispatch[i], label=f'{self.bidders[i].get_name()}') for i in range(len(dispatch))]
-        # ax.legend()
-        
-        # if self.wandb_run is not None:
-        #     self.wandb_run.log({f"CHP_dispatch": wandb.Image(fig)}, commit=False)
         
         return solution.x, dispatch
 
 
 class FullInfo:
     def __init__(self, bidders: list, n_products: int, wandb_run):
+        """
+        Full information benchmark - maximizes social welfare with complete information.
+        """
         self.bidders = bidders
         self.wandb_run = wandb_run
 
@@ -320,6 +317,67 @@ class FullInfo:
             primal_obj = self.model.ObjVal
         
         print(f'FullInfo objective: {primal_obj:.2f}')
-        self.wandb_run.log({"Primal_obj": primal_obj})
+        self.wandb_run.log({"Welfare": primal_obj}, commit=False)
+        [self.wandb_run.log({f"Product_traded {j}": np.sum(np.abs(dispatch), 0)[j]}, commit=False) for j in range(self.n_products)]
         
         return None, dispatch
+
+
+class FullInfoSequential:
+    """ Sequential energy and flexibility market with full information - maximizes social welfare with complete information. """
+    def __init__(self, bidders: list, n_products: int, wandb_run):
+        self.bidders = bidders
+        self.wandb_run = wandb_run
+
+        # Params
+        self.n_products = n_products
+        assert n_products % 2 == 0, "Number of products must be even for FullInfoSequential mechanism"
+        self.nH = int(n_products / 2)  # number of hours
+
+        self.enermodel = gp.Model("FullInfo", env=gp.Env(params={'LogToConsole': 0, 'OutputFlag': 0}))
+        self.flexmodel = gp.Model("FullInfo", env=gp.Env(params={'LogToConsole': 0, 'OutputFlag': 0}))
+
+    def run(self, ):
+        # Run energy only market
+        dispatch_vars = []
+        obj = 0
+        for bidder in self.bidders:
+            bidder.config['fixflex'] = [0] * self.nH  # disable flexibility
+            bidder.config['fixener'] = False
+
+            dispatch_var, obj_expr = bidder.add_model(self.enermodel)
+            dispatch_vars.append(dispatch_var)
+            obj += obj_expr
+        self.enermodel.setObjective(obj, gp.GRB.MAXIMIZE)
+        self.enermodel.addConstrs((gp.quicksum(dispatch_vars[i][j] for i in range(len(self.bidders))) == 0 for j in range(self.n_products)), name="Trade balance")
+        self.enermodel.optimize()
+
+        if self.enermodel.status == gp.GRB.OPTIMAL:
+            enerdispatch = [[dispatch_var[n].x for n in range(self.n_products)] for dispatch_var in dispatch_vars]
+            enerprimal_obj = self.enermodel.ObjVal
+
+
+        # Run flexibility only market
+        dispatch_vars = []
+        obj = 0
+        for i, bidder in enumerate(self.bidders):
+            bidder.config['fixener'] = enerdispatch[i][:self.nH]  # fix energy dispatch
+            bidder.config['fixflex'] = False
+
+            dispatch_var, obj_expr = bidder.add_model(self.flexmodel)
+            dispatch_vars.append(dispatch_var)
+            obj += obj_expr
+        self.flexmodel.setObjective(obj, gp.GRB.MAXIMIZE)
+        self.flexmodel.addConstrs((gp.quicksum(dispatch_vars[i][j] for i in range(len(self.bidders))) == 0 for j in range(self.n_products)), name="Trade balance")
+        self.flexmodel.optimize()
+
+        if self.flexmodel.status == gp.GRB.OPTIMAL:
+            flexdispatch = [[dispatch_var[n].x for n in range(self.n_products)] for dispatch_var in dispatch_vars]
+            flexprimal_obj = self.flexmodel.ObjVal
+        
+        
+        print(f'Sequential welfare: {flexprimal_obj:.2f}')
+        self.wandb_run.log({"Welfare": flexprimal_obj}, commit=False)
+        [self.wandb_run.log({f"Product_traded {j}": np.sum(np.abs(flexdispatch), 0)[j]}, commit=False) for j in range(self.n_products)]
+        
+        return None, flexdispatch

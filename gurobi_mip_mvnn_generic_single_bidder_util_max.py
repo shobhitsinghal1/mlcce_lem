@@ -13,7 +13,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
     def __init__(self, mip_params):
-        
         # MVNN PARAMETERS
         self.trained_model = None  # MVNN TORCH MODEL
         self.price = None # scaled price vector
@@ -44,8 +43,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                                     'OutputFlag': 0 if not self.solve_verbose else 1})
 
 
-    def __calc_preactivated_box_bounds(self,
-                                     verbose = False):
+    def __calc_preactivated_box_bounds(self, verbose = False):
 
         # BOX-bounds for y variable (preactivated!!!!) as column vectors
 
@@ -109,10 +107,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
         self.mip = gp.Model("MVNN GENERIC MIP", env=self.gpenv)
 
-        # Add IntFeasTol, primal feasibility
-        # if self.MIPGap:
-        #     self.mip.Params.MIPGap = self.MIPGap
-
         self.__calc_preactivated_box_bounds(verbose=self.verbose)
 
         # --- Variable declaration -----
@@ -145,7 +139,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                 self.b_variables.append(tmp_b_variables)
 
         layer = self.trained_model.output_layer
-        self.y_variables.append([self.mip.addVar(name='y_output_0', vtype = GRB.CONTINUOUS, lb = float('-inf'))])   #C: lb
+        self.y_variables.append([self.mip.addVar(name='y_output_0', vtype = GRB.CONTINUOUS, lb = float('-inf'))])   # -inf lower bound since prosumer value can be negative
 
         # ---  MVNN Constraints ---
         # Remark: now we need to access for self.y_variables[i+1] the self.ts[i-1], self.a_variables[i-1] and self.b_variables[i-1] !!!
@@ -202,14 +196,8 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
                         self.mip.addConstr(self.y_variables[i+1][j] >= gp.quicksum(weight[k] * self.y_variables[i][k] for k in range(len(weight))) + layer.bias.data[j] + (self.ts[i-1][j, 0] - self.upper_box_bounds[i+1][j, 0]) * self.b_variables[i-1][j], name=f'HLayer_{i+1}_{j}_Default_CT4')
 
         output_weight = self.trained_model.output_layer.weight.data[0]
-        # if (self.trained_model.output_layer.bias is not None):
         output_bias = self.trained_model.output_layer.bias.data
-        # else:
-        #     output_bias = 0
 
-        # remove 0 bias in output
-        # if output_bias!=0:
-        #     raise ValueError('output_bias is not 0')
 
         # Final output layer of MVNN
         # Linear Constraints for the output layer WITH lin_skip_layer: W*y
@@ -281,11 +269,6 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
 
 
     def get_max_util_bundle(self, ) -> np.ndarray:
-        
-        # if not self.solve_verbose:
-        #     with contextlib.redirect_stdout(io.StringIO()) as f:
-        #         self.mip.Params.LogToConsole = 0
-        #         self.mip.Params.OutputFlag = 0
 
         # set solve parameter (if not sepcified, default values are used)
         self.mip.Params.TimeLimit = self.solve_time_limit # Default +inf

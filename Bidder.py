@@ -9,7 +9,9 @@ import matplotlib.pyplot as plt
 
 
 class Bidder(ABC):
-    
+    """
+    Abstract class for a bidder.
+    """
     @abstractmethod
     def bundle_query(self, price: np.ndarray) -> tuple:
         pass
@@ -28,7 +30,9 @@ class Bidder(ABC):
 
 
 class Prosumer(Bidder):
-
+    """
+    Parent class for a prosumer containing common methods.
+    """
     def __init__(self, name: str, n_product: int, config: dict):
         self.name = name
         self.n_product = n_product
@@ -50,15 +54,15 @@ class Prosumer(Bidder):
             param_values = self.config[param_name]
         return param_values
 
-    # @abstractmethod
+    # Prosumer specific method to be implemented in child classes
     def add_asset_params_vars(self, m: dict):
         pass
     
-    # @abstractmethod
+    # Prosumer specific method to be implemented in child classes
     def add_asset_constraints(self, m: dict):
         pass
 
-    # @abstractmethod
+    # Prosumer specific method to be implemented in child classes
     def get_value_obj_expr(self, m: dict):
         pass
 
@@ -161,9 +165,11 @@ class Prosumer(Bidder):
 
 
 class ProsumerRenewable(Prosumer):
+    """ 
+    Child class for a prosumer with renewable generation trading energy only. 
+    """
 
     def add_asset_params_vars(self, m: dict):
-        
         nH = self.n_product
 
         #sets
@@ -180,7 +186,6 @@ class ProsumerRenewable(Prosumer):
     
 
     def add_asset_constraints(self, m: dict):
-
         m['model'].addConstrs((m['p'][h] <= 0 for h in m['H']), name=f'cons10u_{self.name}')
         m['model'].addConstrs((m['p'][h] >= -m['generation'][h] for h in m['H']), name=f'cons10l_{self.name}')
 
@@ -192,7 +197,9 @@ class ProsumerRenewable(Prosumer):
 
 
 class ProsumerConsumer(Prosumer):
-
+    """
+    Child class for a consumer trading energy only.
+    """
     def add_asset_params_vars(self, m: dict):
         
         nH = self.n_product
@@ -223,7 +230,9 @@ class ProsumerConsumer(Prosumer):
 
 
 class ProsumerStorage(Prosumer):
-
+    """
+    Child class for a storage facility trading energy only.
+    """
     def add_asset_constraints(self, m: dict):
 
         m['model'].addConstrs((m['p'][h] <= m['M'] * m['delta'][h] for h in m['H']), name=f'cons1_{self.name}')
@@ -265,17 +274,17 @@ class ProsumerStorage(Prosumer):
         m['H'] = list(range(nH))
         m['Hs'] = list(range(-1, nH)) # for storage SoC
 
-        m['M'] = 1000 # Is there a better way to do this - like the one in mvnn mip?
+        m['M'] = 1000 # Is there a better way to get this number?
 
         # preference parameters
-        m['oppcprice'] = self.get_param_values('oppcprice', nH) # (h) lower limit violation penalty coeff
-        m['oppdprice'] = self.get_param_values('oppdprice', nH) # (h) upper limit violation penalty coeff
-        m['available'] = self.get_param_values('available', nH)
+        m['oppcprice'] = self.get_param_values('oppcprice', nH) # (h) opportunity price for charging
+        m['oppdprice'] = self.get_param_values('oppdprice', nH) # (h) opportunity price for discharging
+        m['available'] = self.get_param_values('available', nH) # (h) binary for availability
         m['su'] = self.get_param_values('su', nH) # (h) SoC upper limit
         m['sl'] = self.get_param_values('sl', nH) # (h) SoC lower limit
         m['s0'] = self.get_param_values('s0') # () initial SoC
         m['sn'] = self.get_param_values('sn') # () terminal SoC
-        m['alpha'] = self.get_param_values('alpha')
+        m['alpha'] = self.get_param_values('alpha') # soc deviation penalty coeff
         m['eta'] = self.get_param_values('eta') # () charging efficiency
         m['gamma'] = self.get_param_values('gamma', nH) # (h) dissipation rate
         m['beta'] = self.get_param_values('beta', nH) # (h) storage degradation coeff
@@ -284,7 +293,7 @@ class ProsumerStorage(Prosumer):
 
         # variables
         m['p'] = m['model'].addVars(m['H'], name=f'p_{self.name}', lb=float('-inf')) # power for storage
-        #   auxiliary: storage
+        # auxiliary: storage
         m['delta'] = m['model'].addVars(m['H'], vtype=GRB.BINARY, name=f'delta_{self.name}')
         m['s'] = m['model'].addVars( m['Hs'], name=f's_{self.name}')
         m['P'] = m['model'].addVars(m['H'], name=f'P_{self.name}')
@@ -293,7 +302,9 @@ class ProsumerStorage(Prosumer):
 
 
 class ProsumerSwitch(Prosumer):
-
+    """
+    Child class for a prosumer with a switchable load trading energy only.
+    """
     def add_asset_constraints(self, m: dict):
 
         m['model'].addConstrs((gp.quicksum( m['pd'][h] for h in range(k,k+m['tr'])) >= m['z'][k] * m['tr'] for k in m['K']), name=f'consw1_{self.name}')
@@ -334,7 +345,9 @@ class ProsumerSwitch(Prosumer):
 
 
 class ProsumerStorageFlex(Prosumer):
-
+    """
+    Child class for a storage facility trading energy and flexibility.
+    """
     def add_asset_constraints(self, m: dict):
 
         m['model'].addConstrs((m['s0'] + gp.quicksum(m['pe'][h] + m['pf'][h] for h in range(nh+1)) <= m['su'] for nh in m['H']), name=f'cons1u_{self.name}')
@@ -377,7 +390,7 @@ class ProsumerStorageFlex(Prosumer):
 
         # variables
         m['pe'] = m['model'].addVars(m['H'], name=f'pe_{self.name}', lb=float('-inf')) # power for storage
-        m['pf'] = m['model'].addVars(m['H'], name=f'pf_{self.name}', lb=float('-inf'), ub=0) # flexibility
+        m['pf'] = m['model'].addVars(m['H'], name=f'pf_{self.name}') # flexibility
 
         m['p'] = m['model'].addVars(list(range(self.n_product)), name=f'p_{self.name}', lb=float('-inf')) # products
 
@@ -385,7 +398,9 @@ class ProsumerStorageFlex(Prosumer):
 
 
 class ProsumerDSO(Prosumer):
-
+    """
+    Child class for a DSO trading flexibility only.
+    """
     def add_asset_constraints(self, m: dict):
 
         m['model'].addConstrs((m['pe'][h] == 0 for h in m['H']), name=f'conD1_{self.name}')
@@ -431,7 +446,9 @@ class ProsumerDSO(Prosumer):
 
 
 class ProsumerConsumerFlex(Prosumer):
-
+    """
+    Child class for a consumer trading energy and flexibility.
+    """
     def add_asset_params_vars(self, m: dict):
         assert self.n_product % 2 == 0, "The number of products must be even for ProsumerConsumerFlex."
         m['nH'] = int(self.n_product/2)
@@ -471,7 +488,9 @@ class ProsumerConsumerFlex(Prosumer):
 
 
 class ProsumerRenewableFlex(Prosumer):
-
+    """
+    Child class for a prosumer with renewable generation trading energy and flexibility.
+    """
     def add_asset_params_vars(self, m: dict):
         assert self.n_product % 2 == 0, "The number of products must be even for ProsumerRenewableFlex."
         m['nH'] = int(self.n_product/2)
@@ -509,88 +528,11 @@ class ProsumerRenewableFlex(Prosumer):
         return gp.quicksum(m['alphae'][h] * m['pe'][h] * m['pe'][h] + m['oppdprice'][h] * m['pe'][h] for h in m['H'])
 
 
-# outdated
-class LogarithmicBidder(Bidder):
-    def __init__(self, name: str, horizon: int, config: dict):
-        self.name = name
-        self.intervals = horizon
-        
-        # class specific parameters
-        self.flowlimitup = config[name]['flowlimitup']
-        self.flowlimitdown = config[name]['flowlimitdown']
-        self.scale = config[name]['scale']
-        self.shift = config[name]['shift']
-        self.full_info_imp = True
-
-        # piecewise linear approximation of the logarithmic function
-        self.x_pts = np.linspace(self.flowlimitdown, self.flowlimitup, config[name]['granularity'])
-        self.y_pts = np.log(self.x_pts - self.shift)
-        self.xl = self.x_pts[:-1]
-        self.xu = self.x_pts[1:]
-        self.yl = np.log(self.xl - self.shift)
-        self.yu = np.log(self.xu - self.shift)
-        self.slope = (self.yu - self.yl) / (self.xu - self.xl)
-
-        self.value_model = self.__get_value_model()
-
-
-    def __neg_utility_func(self, x, price):
-        return -self.get_value(x) + np.dot(price, x)        
-
-
-    def __get_value_model(self, ):
-        valuemodel = gp.Model('Value model')
-        valuemodel.setParam('OutputFlag', 0)
-        xvar, obj = self.add_model(valuemodel)
-        [valuemodel.addConstr(xvar[i] == 0, name=f'valuecon_{i}') for i in range(self.intervals)]
-        valuemodel.setObjective(obj, GRB.MAXIMIZE)
-        valuemodel.update()
-        return valuemodel
-
-
-    def add_model(self, model: gp.Model):
-        """
-        Adds the dispatch variables and constraints to the gurobi model
-        Returns dispatch variables and objective expression
-        """
-        x = model.addVars([i for i in range(self.intervals)], name=f'{self.name}_x', vtype=GRB.CONTINUOUS, lb=self.flowlimitdown, ub=self.flowlimitup)
-
-        y = model.addVars([i for i in range(self.intervals)], name=f'{self.name}_y', vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY)
-        [[model.addConstr(y[i] <= self.yl[j] + (x[i] - self.xl[j])*self.slope[j]) for j in range(len(self.xl))] for i in range(self.intervals)]
-
-        return x, gp.quicksum(y[i]*self.scale for i in range(self.intervals))
-
-
-    def bundle_query(self, price):
-        assert len(price) == self.intervals, "Price vector length must match the horizon."
-
-        res = opt.minimize(self.__neg_utility_func, x0=np.zeros(self.intervals), args=(price), constraints=[], bounds=[(self.flowlimitdown, self.flowlimitup)]*self.intervals)
-        return res.x, -res.fun + np.dot(price, res.x)
-
-
-    def get_value(self, x):
-        assert len(x) == self.intervals, "x must have the same length as horizon."
-        
-        for i in range(self.intervals):
-            self.value_model.getConstrByName(f'valuecon_{i}').RHS = x[i]
-        self.value_model.update()
-        self.value_model.optimize()
-
-        return self.value_model.getObjective().getValue()
-        # return np.sum(np.log(x[i] - self.shift) for i in range(self.intervals))*self.scale
-
-
-    def get_capacity_generic_goods(self, ):
-        return [np.array([self.flowlimitdown]*self.intervals), np.array([self.flowlimitup]*self.intervals)]
-
-
-    def get_name(self, ):
-        return self.name
-
-
 if __name__ == "__main__":
+    """
+    Test script plotting bidder's value function.
+    """
     bidder1 = ProsumerStorage('EV2', 2)
-    # bidder2 = ProsumerGurobi('c', 2)
 
     bounds1 = bidder1.get_capacity_generic_goods()
     bounds = bounds1
