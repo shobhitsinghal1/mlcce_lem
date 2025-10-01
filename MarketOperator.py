@@ -77,13 +77,17 @@ class MarketOperator:
         self.wandb_run.finish()
 
 if __name__ == "__main__":
-    for n in [40]:
-        community = f'random6_{n}'
+    for n in [120]:
+        community = f'random24_{n}'
         print("\nN_products ", n)
-        for i in range(0,1):
+        for i in range(3,4):
             print(f"\nSeed: {i}")
-            # community_manager = MarketOperator(community, mechanism='CCE', seed=i)
-            # community_manager.clear_market()
+            community_manager = MarketOperator(community, mechanism='CCE', seed=i)
+            community_manager.clear_market()
             community_manager = MarketOperator(community, mechanism='MLCCE', seed=i)
             community_manager.clear_market()
+            # community_manager = MarketOperator(community, mechanism='FullInfo', seed=i)
+            # community_manager.clear_market()
+            # community_manager = MarketOperator(community, mechanism='CHP', seed=i)
+            # community_manager.clear_market()
             print('\n')

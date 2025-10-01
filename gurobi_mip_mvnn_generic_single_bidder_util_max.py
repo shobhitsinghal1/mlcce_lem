@@ -97,7 +97,7 @@ class GUROBI_MIP_MVNN_GENERIC_SINGLE_BIDDER_UTIL_MAX:
         # Bounded ReLU (bReLU) activation function for MVNNS with cutoff t
         return np.minimum(t, np.maximum(0, x)).reshape(-1, 1)
 
-    @profile
+
     def __generate_mip(self, ):
 
         self.y_variables = []  # POSITIVE INTEGER VARS y[0] and CONT VARS y[i] for i > 0

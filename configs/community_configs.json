@@ -55,6 +55,126 @@
         "imbalance_tol_coef": 0.01,
         "n_products": 6
     },
+    "random12_10": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [2, 2, 2, 2, 2],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 12
+    },
+    "random12_20": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [4, 4, 4, 4, 4],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 12
+    },
+    "random12_40": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [8, 8, 8, 8, 8],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 12
+    },
+    "random12_80": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [16, 16, 16, 16, 16],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 12
+    },
+    "random12_120": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [24, 24, 24, 24, 24],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 12
+    },
+    "random18_10": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [2, 2, 2, 2, 2],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 18
+    },
+    "random18_20": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [4, 4, 4, 4, 4],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 18
+    },
+    "random18_40": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [8, 8, 8, 8, 8],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 18
+    },
+    "random18_80": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [16, 16, 16, 16, 16],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 18
+    },
+    "random18_120": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [24, 24, 24, 24, 24],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 18
+    },
+    "random24_10": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [2, 2, 2, 2, 2],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 24
+    },
+    "random24_20": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [4, 4, 4, 4, 4],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 24
+    },
+    "random24_40": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [8, 8, 8, 8, 8],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 24
+    },
+    "random24_80": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [16, 16, 16, 16, 16],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 24
+    },
+    "random24_120": {
+        "bidder_types": ["HomeStorage", "HeatPump", "Wind", "Consumer", "Switch"],
+        "N": [24, 24, 24, 24, 24],
+        "price_max": 80,
+        "price_min": 0,
+        "imbalance_tol_coef": 0.01,
+        "n_products": 24
+    },
     "enerflextoy2": {
         "bidder_types": ["StorageFlex", "DSO", "ConsumerFlex", "RenewableFlex"],
         "N": [2, 2, 1, 1],

@@ -7,6 +7,7 @@ from codetiming import Timer
 import concurrent.futures
 import logging
 import gurobipy as gp
+import time
 
 #own libs
 from value_function_est import ValueFunctionEstimateDQ
@@ -52,10 +53,10 @@ class MLCCE:
             self.value_estimators.append(ValueFunctionEstimateDQ(capacity_generic_goods=self.capacities[i],
                                                                  mvnn_params=mvnn_param,
                                                                  mip_params=mip_params,
-                                                                 price_scale=np.max(np.abs(price_bound)) # TODO: see if this works as expected
+                                                                 price_scale=np.max(np.abs(price_bound))
                                                                 ))
 
-    @profile
+
     def __next_price_grad(self, decvar: np.ndarray, prev_imb: np.ndarray, prev_price: np.ndarray):
         """
         Gradient of the next price objective with respect to the decision variables.
@@ -66,7 +67,7 @@ class MLCCE:
 
         return np.dot(grad, prev_imb)
     
-    @profile
+
     def __next_price_objective(self, decvar: np.ndarray, prev_imb: np.ndarray, prev_price: np.ndarray):
         """
         Objective for the next price optimization problem.
@@ -77,7 +78,7 @@ class MLCCE:
         payments = np.array([np.dot(price, bundle) for bundle in predicted_bundles])
         return np.sum(predicted_values - payments)
 
-    @profile
+
     def __next_price(self, ):
         """
         Solve the next price optimization problem.
@@ -148,13 +149,20 @@ class MLCCE:
                 _, metrics = self.value_estimators[i].dq_train_mvnn() #true values only for validation purposes
                 return metrics
     
+            [self.value_estimators[i].add_data_point(self.price_iterates[-1], self.queried_bundles[-1][i], self.queried_values[-1][i]) for i in range(self.num_participants)]
+            times = []
             with self.train_timer:
-                [self.value_estimators[i].add_data_point(self.price_iterates[-1], self.queried_bundles[-1][i], self.queried_values[-1][i]) for i in range(self.num_participants)]
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                    for i, metrics in enumerate(executor.map(train_helper, range(self.num_participants))):
-                        for key in self.value_estimator_metrics[i].keys():
-                            self.value_estimator_metrics[i][key].append(metrics[key])
-
+                # with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor: # parallel version
+                #     for i, metrics in enumerate(executor.map(train_helper, range(self.num_participants))):
+                #         for key in self.value_estimator_metrics[i].keys():
+                #             self.value_estimator_metrics[i][key].append(metrics[key])
+                for i in range(self.num_participants): # sequential version
+                    start = time.time()
+                    metrics = train_helper(i)
+                    times.append(time.time() - start)
+                    for key in self.value_estimator_metrics[i].keys():
+                        self.value_estimator_metrics[i][key].append(metrics[key])
+            print(f"Value estimator training time mean: {np.mean(times):.2f}")
 
             # Update prices
             with self.next_price_timer:

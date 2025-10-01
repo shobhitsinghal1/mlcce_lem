@@ -235,8 +235,10 @@ class ProsumerStorage(Prosumer):
     """
     def add_asset_constraints(self, m: dict):
 
+        # Constraints for charge/discharge indicator and SoC evolution
         m['model'].addConstrs((m['p'][h] <= m['M'] * m['delta'][h] for h in m['H']), name=f'cons1_{self.name}')
         m['model'].addConstrs((m['p'][h] >= -m['M'] * (1 - m['delta'][h]) for h in m['H']), name=f'cons2_{self.name}')
+        
         m['model'].addConstrs((m['s'][h-1] + m['eta'] * m['p'][h] - m['gamma'][h] - m['M'] * (1 - m['delta'][h]) <= m['s'][h] for h in m['H']), name=f'cons3l_{self.name}')
         m['model'].addConstrs((m['s'][h] <= m['s'][h-1] + m['eta'] * m['p'][h] - m['gamma'][h] + m['M'] * (1 - m['delta'][h]) for h in m['H']), name=f'cons3u_{self.name}')
         m['model'].addConstrs((m['s'][h-1] + m['p'][h] / m['eta'] - m['gamma'][h] - m['M'] * m['delta'][h] <= m['s'][h] for h in m['H']), name=f'cons4l_{self.name}')
@@ -245,16 +247,15 @@ class ProsumerStorage(Prosumer):
         m['model'].addConstrs((m['s'][h] <= m['su'][h] for h in m['H']), name=f'cons5_{self.name}')
         m['model'].addConstrs((m['s'][h] >= m['sl'][h] for h in m['H']), name=f'cons6_{self.name}')
         m['model'].addConstr((m['s'][-1] == m['s0']), name=f'cons7a_{self.name}')
-        # if m['sn'] >=0:
-        #     m['model'].addConstr((m['s'][m['H'][-1]] == m['sn']), name=f'cons7b_{self.name}')
-
-        m['model'].addConstrs((m['P'][h] >= m['p'][h] for h in m['H']), name=f'cons8_{self.name}')
-        m['model'].addConstrs((m['P'][h] >= -m['p'][h] for h in m['H']), name=f'cons9_{self.name}')
 
         m['model'].addConstrs((m['p'][h] <= m['power_limit_up'] for h in m['H']), name=f'cons10u_{self.name}')
         m['model'].addConstrs((m['p'][h] >= m['power_limit_down'] for h in m['H']), name=f'cons10l_{self.name}')
 
+        m['model'].addConstrs((m['P'][h] >= m['p'][h] for h in m['H']), name=f'cons8_{self.name}')
+        m['model'].addConstrs((m['P'][h] >= -m['p'][h] for h in m['H']), name=f'cons9_{self.name}')
         m['model'].addConstrs((m['P'][h] <= m['M'] * m['available'][h] for h in m['H']), name=f'cons12_{self.name}')
+
+
 
         return
 
@@ -308,9 +309,9 @@ class ProsumerSwitch(Prosumer):
     def add_asset_constraints(self, m: dict):
 
         m['model'].addConstrs((gp.quicksum( m['pd'][h] for h in range(k,k+m['tr'])) >= m['z'][k] * m['tr'] for k in m['K']), name=f'consw1_{self.name}')
-        m['model'].addConstr((gp.quicksum(m['z'][k] for k in m['K']) >= 1 - m['y']), name=f'consw2_{self.name}')
+        m['model'].addConstr((gp.quicksum(m['z'][k] for k in m['K']) >= 1), name=f'consw2_{self.name}')
         m['model'].addConstrs((m['p'][h] >= m['capacity'] * m['pd'][h] for h in m['H']), name=f'consw3_{self.name}')
-        m['model'].addConstrs((m['p'][h] <= m['capacity'] for h in m['H']), name=f'consw4_{self.name}')
+        m['model'].addConstrs((m['p'][h] <= m['capacity'] * m['pd'][h] for h in m['H']), name=f'consw4_{self.name}')
 
         return
 
@@ -323,7 +324,7 @@ class ProsumerSwitch(Prosumer):
         
         nH = self.n_product
 
-        #sets
+        # sets
         m['H'] = list(range(nH))
 
         # preference parameters
@@ -336,10 +337,10 @@ class ProsumerSwitch(Prosumer):
 
         # variables
         m['p'] = m['model'].addVars(m['H'], name=f'p_{self.name}') # power transaction which is continuous
-        #   auxiliary: storage
+        # auxiliary: storage
         m['pd'] = m['model'].addVars(m['H'], vtype=GRB.BINARY, name=f'pd_{self.name}')
         m['z'] = m['model'].addVars(m['K'], vtype=GRB.BINARY, name=f'z_{self.name}')
-        m['y'] = m['model'].addVar(vtype=GRB.BINARY, name=f'y_{self.name}')
+        # m['y'] = m['model'].addVar(vtype=GRB.BINARY, name=f'y_{self.name}')
 
         return
 

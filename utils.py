@@ -34,6 +34,105 @@ mvnn_params = {
         'use_gradient_clipping': False,
         'train_split': 0.7,
         'batch_size': 1000,
+        'epochs': 262,
+        'l2_reg': .0012,
+        'learning_rate': 0.0076,
+        'stopping_condition': 'train_loss',
+        'num_hidden_layers': 1,
+        'num_hidden_units': 9,
+        'layer_type': 'MVNNLayerReLUProjected',
+        'lin_skip_connection': False,
+        'dropout_prob': 0,
+        'init_method': 'custom',
+        'random_ts': [0, 1],
+        'trainable_ts': True,
+        'init_E': 1,
+        'init_Var': 0.09,
+        'init_b': 0.05,
+        'init_bias': 0.05,
+        'init_little_const': 0.1,
+        'device': 'cpu'},
+
+    'ProsumerRenewable': {
+        'clip_grad_norm': 1,
+        'use_gradient_clipping': False,
+        'train_split': 0.7,
+        'batch_size': 1000,
+        'epochs': 162,
+        'l2_reg': .021,
+        'learning_rate': 0.00294,
+        'stopping_condition': 'early_stop',
+        'num_hidden_layers': 2,
+        'num_hidden_units': 10,
+        'layer_type': 'MVNNLayerReLUProjected',
+        'lin_skip_connection': True,
+        'dropout_prob': 0,
+        'init_method': 'custom',
+        'random_ts': [0, 1],
+        'trainable_ts': True,
+        'init_E': 1,
+        'init_Var': 0.09,
+        'init_b': 0.05,
+        'init_bias': 0.05,
+        'init_little_const': 0.1,
+        'device': 'cpu'},
+    
+    'ProsumerConsumer': {
+        'clip_grad_norm': 1,
+        'use_gradient_clipping': False,
+        'train_split': 0.7,
+        'batch_size': 1000,
+        'epochs': 127,
+        'l2_reg': .00169,
+        'learning_rate': 0.0074,
+        'stopping_condition': 'train_loss',
+        'num_hidden_layers': 1,
+        'num_hidden_units': 9,
+        'layer_type': 'MVNNLayerReLUProjected',
+        'lin_skip_connection': False,
+        'dropout_prob': 0,
+        'init_method': 'custom',
+        'random_ts': [0, 1],
+        'trainable_ts': True,
+        'init_E': 1,
+        'init_Var': 0.09,
+        'init_b': 0.05,
+        'init_bias': 0.05,
+        'init_little_const': 0.1,
+        'device': 'cpu'},
+    
+    'ProsumerSwitch': {
+        'clip_grad_norm': 1,
+        'use_gradient_clipping': False,
+        'train_split': 0.7,
+        'batch_size': 1000,
+        'epochs': 49,
+        'l2_reg': .045,
+        'learning_rate': 0.0031,
+        'stopping_condition': 'val_loss',
+        'num_hidden_layers': 2,
+        'num_hidden_units': 4,
+        'layer_type': 'MVNNLayerReLUProjected',
+        'lin_skip_connection': True,
+        'dropout_prob': 0,
+        'init_method': 'custom',
+        'random_ts': [0, 1],
+        'trainable_ts': True,
+        'init_E': 1,
+        'init_Var': 0.09,
+        'init_b': 0.05,
+        'init_bias': 0.05,
+        'init_little_const': 0.1,
+        'device': 'cpu'}
+    
+}
+
+mvnn_params_old = {
+    'ProsumerStorage': {
+        'clip_grad_norm': 1,
+        'use_gradient_clipping': False,
+        'train_split': 0.7,
+        'batch_size': 1000,
         'epochs': 238,
         'l2_reg': .026,
         'learning_rate': 0.0075,
@@ -124,7 +223,6 @@ mvnn_params = {
         'init_bias': 0.05,
         'init_little_const': 0.1,
         'device': 'cpu'}
-    
 }
 
 mvnn_params_hpopt = {
@@ -308,6 +406,6 @@ def make_bidder_configs(community, seed):
 
 if __name__ == "__main__":
     for n in [10, 20, 40, 80, 120]:
-        community = f'random6_{n}'
+        community = f'random12_{n}'
         for i in range(4):
             make_bidder_configs(community, i)
